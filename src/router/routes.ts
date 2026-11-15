@@ -1,5 +1,5 @@
 import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
-import { parseGameCode } from '@shared/protocol/gameCode'
+import { parseGameCode } from '@shared/protocol'
 import LandingView from '@/views/LandingView.vue'
 
 /** Rewrites /j/bcd-fg to /j/BCDFG, so every screen sees the canonical code. */

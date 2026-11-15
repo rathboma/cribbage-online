@@ -313,8 +313,8 @@ function countShow(s: GameState, events: GameEvent[]): void {
   const starter = parseCard(s.starter as CardId)
   const pone = otherSeat(s.dealer)
   const counts: [Seat, 'hand' | 'crib', CardId[]][] = [
-    [pone, 'hand', s.kept[pone]],
-    [s.dealer, 'hand', s.kept[s.dealer]],
+    [pone, 'hand', sortIds(s.kept[pone])],
+    [s.dealer, 'hand', sortIds(s.kept[s.dealer])],
     [s.dealer, 'crib', sortIds([...s.discards[0], ...s.discards[1]])],
   ]
   for (const [seat, source, cards] of counts) {

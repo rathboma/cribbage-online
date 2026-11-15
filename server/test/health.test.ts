@@ -1,6 +1,6 @@
 import { env, exports } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { PROTOCOL_VERSION } from '../../shared/version'
+import { PROTOCOL_VERSION } from '../../shared/protocol'
 
 describe('GET /api/health', () => {
   it('answers ok from D1, with the protocol version from shared/', async () => {

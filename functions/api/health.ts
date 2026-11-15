@@ -1,5 +1,5 @@
 import type { Env } from '../../server/env'
-import { PROTOCOL_VERSION } from '../../shared/version'
+import { PROTOCOL_VERSION } from '../../shared/protocol'
 
 /** GET /api/health: checks that the Function runs and can query D1. */
 export const onRequestGet: PagesFunction<Env> = async ({ env }) => {

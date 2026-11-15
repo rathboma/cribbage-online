@@ -74,7 +74,7 @@ through `wrangler`; no Cloudflare account is needed for development.
 | Folder        | What lives there                                                                                                        |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `src/`        | The Vue client: `views/` (one per route), `components/`, `stores/` (Pinia), `api/` (HTTP client), `three/` (3D table), `rtc/` (video) |
-| `shared/`     | TypeScript used by both the client and the server: the rules engine and the protocol types. No DOM, Node or Cloudflare APIs |
+| `shared/`     | TypeScript used by both the client and the server: `engine/` (the rules) and `protocol/` (the API contract; import it from `shared/protocol`, and only the server may import `protocol/schemas`). No DOM, Node or Cloudflare APIs |
 | `functions/`  | Cloudflare Pages Functions: route files only (a file's path is its URL)                                                 |
 | `server/`     | Server-only helpers imported by `functions/` (database access, auth, rate limits)                                       |
 | `migrations/` | D1 SQL migrations                                                                                                       |

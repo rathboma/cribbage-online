@@ -11,6 +11,25 @@ const noAliasImports = {
   message: 'Use a relative import: the @/ and @shared/ aliases only work in the client build.',
 }
 
+const zodMessage = 'zod is for server-side validation; the client imports protocol types only.'
+
+/** Imports shared/ must avoid: it runs in the browser and on Cloudflare. */
+function sharedImports({ allowZod }: { allowZod: boolean }) {
+  return {
+    paths: [
+      ...['vue', 'pinia', 'vue-router', 'three'].map((name) => ({
+        name,
+        message: 'shared/ is used by the server too: no client frameworks.',
+      })),
+      ...(allowZod ? [] : [{ name: 'zod', message: 'Only shared/protocol/schemas.ts uses zod.' }]),
+    ],
+    patterns: [
+      noAliasImports,
+      { regex: '^(node|cloudflare):', message: 'shared/ must not depend on a platform API.' },
+    ],
+  }
+}
+
 export default defineConfigWithVueTs(
   {
     name: 'app/files-to-lint',
@@ -59,20 +78,29 @@ export default defineConfigWithVueTs(
           message: 'Inject an Rng instead, so results are reproducible.',
         },
       ],
+      'no-restricted-imports': ['error', sharedImports({ allowZod: false })],
+    },
+  },
+
+  {
+    // Request validation is the one part of shared/ that uses zod; only the server imports it.
+    name: 'app/protocol-schemas',
+    files: ['shared/protocol/schemas.ts'],
+    rules: {
+      'no-restricted-imports': ['error', sharedImports({ allowZod: true })],
+    },
+  },
+
+  {
+    // Keep zod out of the client bundle: the client imports protocol types, never schemas.
+    name: 'app/client-imports',
+    files: ['src/**/*.{ts,vue}'],
+    rules: {
       'no-restricted-imports': [
         'error',
         {
-          paths: ['vue', 'pinia', 'vue-router', 'three'].map((name) => ({
-            name,
-            message: 'shared/ is used by the server too: no client frameworks.',
-          })),
-          patterns: [
-            noAliasImports,
-            {
-              regex: '^(node|cloudflare):',
-              message: 'shared/ must not depend on a platform API.',
-            },
-          ],
+          paths: [{ name: 'zod', message: zodMessage }],
+          patterns: [{ regex: 'protocol/schemas', message: zodMessage }],
         },
       ],
     },

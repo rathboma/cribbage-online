@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { parseGameCode } from '@shared/protocol/gameCode'
+import { parseGameCode } from '@shared/protocol'
 
 const props = defineProps<{ code?: string }>()
 
