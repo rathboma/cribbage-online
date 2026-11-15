@@ -39,7 +39,11 @@ export interface GameTransport {
   onFatal(listener: (error: ApiError) => void): () => void
   /** Polls very often while on (WebRTC signalling, P5.4). */
   setBoost(on: boolean): void
-  /** The user did something: go back to the active polling intervals now. */
+  /**
+   * The user did something: go back to the active polling intervals. Polls at once if polling
+   * had slowed down (idle, hidden tab, finished game, error backoff); at an active rate the
+   * next poll is already close, so nothing extra is sent.
+   */
   nudge(): void
   /** Starts polling again after a pause. */
   resume(): void
@@ -114,6 +118,8 @@ export class PollingTransport implements GameTransport {
   private boost = false
   private failures = 0
   private timer: unknown = null
+  /** How long the waiting timer was set for; null when no timer is waiting. */
+  private pendingDelay: number | null = null
   private lastChange = 0
   private lastActivity = 0
   private endedAt: number | null = null
@@ -193,15 +199,21 @@ export class PollingTransport implements GameTransport {
 
   nudge(): void {
     this.lastActivity = this.env.now()
-    if (!this.stopped && !this.paused) this.schedule(0)
+    if (this.stopped || this.paused) return
+    // No timer: a request is in flight, and the delay after it will already count this
+    // activity. A short timer: the next poll is a moment away. Either way, an extra request
+    // for every tap or key press would only add load.
+    if (this.pendingDelay === null || this.pendingDelay <= POLL.myMove) return
+    this.schedule(0)
   }
 
   resume(): void {
     if (this.stopped) return
     this.paused = false
     if (this.endedAt !== null) this.endedAt = this.env.now()
+    this.lastActivity = this.env.now()
     this.setConnection('connecting')
-    this.nudge()
+    this.schedule(0)
   }
 
   /** How long to wait before the next poll, or null to pause. */
@@ -272,8 +284,10 @@ export class PollingTransport implements GameTransport {
       this.setConnection('paused')
       return
     }
+    this.pendingDelay = delay
     this.timer = this.env.setTimer(() => {
       this.timer = null
+      this.pendingDelay = null
       void this.poll()
     }, delay)
   }
@@ -281,6 +295,7 @@ export class PollingTransport implements GameTransport {
   private clearTimer(): void {
     if (this.timer !== null) this.env.clearTimer(this.timer)
     this.timer = null
+    this.pendingDelay = null
   }
 
   private exclusive<T>(task: () => Promise<T>): Promise<T> {

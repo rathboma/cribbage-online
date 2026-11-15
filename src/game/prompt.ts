@@ -36,7 +36,9 @@ export function promptFor(view: PlayerView, seats: Seats, status: GameStatus): P
   if (view.phase === 'game_over') {
     return wait(view.winner === seats.me ? 'You won the game!' : `${opponent} won the game.`)
   }
-  if (status === 'abandoned' || status === 'finished') return wait('This game has ended.')
+  // Only a game ended without a result. A finished game always has a winner; if the view on
+  // screen is not there yet (an animation still playing), it gets its ordinary prompt.
+  if (status === 'abandoned') return wait('This game has ended.')
 
   switch (view.phase) {
     case 'lobby':

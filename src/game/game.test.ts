@@ -148,6 +148,12 @@ describe('prompt line', () => {
     })
   })
 
+  it('keeps describing the view on screen while the last moves of a finished game catch up', () => {
+    // The server already says finished, but the screen (say, mid-animation) is a move behind.
+    const view = playerView(workedExample(), 0)
+    expect(promptFor(view, seats(0), 'finished').text).toBe('Your turn — count is 0')
+  })
+
   it('knows who the game is waiting for', () => {
     const discard = viewWhen(0, (s) => s.phase === 'discard')
     expect(seatsToAct(discard)).toEqual([0, 1])

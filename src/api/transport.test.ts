@@ -195,6 +195,36 @@ describe('PollingTransport', () => {
     expect(await gapBeforeNextSync(t.sync)).toBe(POLL.waiting)
   })
 
+  it('sends nothing extra for activity while already polling at an active rate', async () => {
+    const t = setup()
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    const calls = t.sync.mock.calls.length
+    // A burst of taps and key presses in the middle of a turn.
+    for (let i = 0; i < 5; i++) t.transport.nudge()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sync.mock.calls.length).toBe(calls)
+    expect(await gapBeforeNextSync(t.sync)).toBe(POLL.waiting)
+  })
+
+  it('counts activity during a request, so the backoff still resets', async () => {
+    const t = setup()
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(3 * MIN)
+    await gapBeforeNextSync(t.sync)
+    expect(await gapBeforeNextSync(t.sync)).toBe(5_000)
+    // The tap lands while a poll is in flight (no timer is waiting).
+    let finish: (r: SyncResponse) => void = () => {}
+    t.sync.mockImplementationOnce(() => {
+      syncTimes.push(Date.now())
+      return new Promise<SyncResponse>((resolve) => (finish = resolve))
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    t.transport.nudge()
+    finish(response())
+    expect(await gapBeforeNextSync(t.sync)).toBe(POLL.waiting)
+  })
+
   it('resets the backoff when something changes', async () => {
     const t = setup()
     t.transport.start(0)

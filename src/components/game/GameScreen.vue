@@ -55,15 +55,9 @@ const tableVisible = computed(
   () => view.value?.phase !== 'show' && view.value?.phase !== 'game_over',
 )
 
-// Any tap or key press means the player is here: poll at the active rate again (at most once
-// a second, so a burst of taps is one request).
-let lastNudge = 0
-function onActivity() {
-  const now = Date.now()
-  if (now - lastNudge < 1000) return
-  lastNudge = now
-  game.nudge()
-}
+// Any tap or key press means the player is here: if polling had slowed down (nothing
+// happening for a while), go back to the active rate.
+const onActivity = () => game.nudge()
 onMounted(() => {
   window.addEventListener('pointerdown', onActivity, { passive: true })
   window.addEventListener('keydown', onActivity)

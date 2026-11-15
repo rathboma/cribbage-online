@@ -222,14 +222,24 @@ describe('game screen', () => {
     expect(wrapper.findAll(testId('hand-card'))).toHaveLength(4)
   })
 
-  it('goes back to active polling when the player taps or types', async () => {
+  it('polls at once when the player comes back after a quiet spell, and not for every tap', async () => {
     await open(workedExample())
-    const calls = sync.mock.calls.length
-    window.dispatchEvent(new Event('pointerdown'))
+    // In the middle of a turn, taps and key presses send nothing extra.
+    let calls = sync.mock.calls.length
     window.dispatchEvent(new Event('pointerdown'))
     window.dispatchEvent(new Event('keydown'))
     await vi.advanceTimersByTimeAsync(0)
-    // A burst of taps is one extra request, not three.
+    expect(sync.mock.calls.length).toBe(calls)
+
+    // Nothing happens for ten minutes: polling has slowed right down.
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + 30_000)
+    calls = sync.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(sync.mock.calls.length).toBe(calls)
+    // The player touches the screen: one poll straight away.
+    window.dispatchEvent(new Event('pointerdown'))
+    window.dispatchEvent(new Event('pointerdown'))
+    await vi.advanceTimersByTimeAsync(0)
     expect(sync.mock.calls.length).toBe(calls + 1)
   })
 })
