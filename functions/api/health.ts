@@ -9,6 +9,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
     return Response.json({ ok: true, protocol: PROTOCOL_VERSION })
   } catch (err) {
     console.error('health check failed', err)
-    return Response.json({ ok: false }, { status: 503 })
+    return Response.json(
+      { ok: false, error: { code: 'unavailable', message: 'The database is not reachable.' } },
+      { status: 503 },
+    )
   }
 }

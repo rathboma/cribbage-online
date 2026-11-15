@@ -17,7 +17,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': `http://127.0.0.1:${API_DEV_PORT}`,
+      // Keep the browser's Host header, so Functions see the same URL and Origin as in
+      // production. (Also used by `vite preview`.)
+      '/api/': { target: `http://127.0.0.1:${API_DEV_PORT}`, changeOrigin: false },
     },
   },
 })

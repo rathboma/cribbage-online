@@ -15,7 +15,7 @@
     "build": "vite build && yarn -s build:functions",
     "build:functions": "wrangler pages functions build --outdir .wrangler/functions-build",
     "preview": "vite preview",
-    "preview:pages": "yarn build && wrangler pages dev",
+    "preview:pages": "yarn build && yarn -s db:migrate:local && wrangler pages dev",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint . --fix && prettier --write .",
     "format": "prettier --write .",
