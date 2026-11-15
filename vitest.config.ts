@@ -1,8 +1,4 @@
-import {
-  buildPagesASSETSBinding,
-  cloudflareTest,
-  readD1Migrations,
-} from '@cloudflare/vitest-plugin'
+import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config.ts'
 import { FUNCTIONS_TEST_BUILD_DIR } from './server/test/global-setup.ts'
@@ -37,8 +33,13 @@ export default defineConfig(async () =>
                 wrangler: { configPath: './wrangler.jsonc' },
                 miniflare: {
                   bindings: { TEST_MIGRATIONS: await readD1Migrations('./migrations') },
-                  // Requests no Function handles fall through to static assets, as on Pages.
-                  serviceBindings: { ASSETS: await buildPagesASSETSBinding('./public') },
+                  // On Pages, requests no Function handles fall through to static assets. Server
+                  // tests don't serve the client, so stand in a 404. (buildPagesASSETSBinding
+                  // would work too, but its file watcher stops Vitest exiting when this project
+                  // is filtered out with --project.)
+                  serviceBindings: {
+                    ASSETS: () => new Response('No static assets in server tests', { status: 404 }),
+                  },
                 },
               }),
             ],
