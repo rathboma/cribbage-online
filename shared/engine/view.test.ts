@@ -5,6 +5,7 @@ import { seededRng, type Rng } from './rng'
 import type { Action, GameState, Pair } from './state'
 import { otherSeat, SEATS, type Seat } from './types'
 import { legalActions, playerView } from './view'
+import { leakedCards } from './leaks'
 
 const topCard: Rng = { nextInt: () => 0 }
 
@@ -14,26 +15,9 @@ function apply(state: GameState, seat: Seat, action: Action, rng: Rng = topCard)
   return result.state
 }
 
-/** Cards `seat` must not see: the opponent's hand, the deck, the opponent's crib cards. */
-function hiddenFrom(state: GameState, seat: Seat): Set<CardId> {
-  const opponent = otherSeat(seat)
-  const cribShown = state.show.some((r) => r.source === 'crib')
-  return new Set([
-    ...state.hands[opponent],
-    ...state.deck,
-    ...(cribShown ? [] : state.discards[opponent]),
-  ])
-}
-
-/** Every CardId that appears anywhere in the JSON of a value. */
-function cardsIn(value: unknown): string[] {
-  return (JSON.stringify(value).match(/"[A2-9TJQK][CDHS]"/g) ?? []).map((s) => s.slice(1, -1))
-}
-
 function expectNoLeak(state: GameState) {
   for (const seat of SEATS) {
-    const hidden = hiddenFrom(state, seat)
-    const leaked = cardsIn(playerView(state, seat)).filter((c) => hidden.has(c as CardId))
+    const leaked = leakedCards(JSON.stringify(playerView(state, seat)), state, seat)
     expect(leaked, `seat ${seat} in ${state.phase} sees hidden cards`).toEqual([])
   }
 }

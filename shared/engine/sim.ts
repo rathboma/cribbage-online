@@ -82,14 +82,22 @@ export function simulateGame(
     onStep?: (step: SimStep) => void
     /** Start from these scores instead of 0-0, e.g. to make every kind of win likely. */
     scores?: Pair<number>
+    /**
+     * The randomness handed to the engine for each action (deals and cuts). By default a stream
+     * seeded from `seed`, separate from the bots' choices; pass a function to mirror how the
+     * server derives its Rng (e.g. from the game code and state version).
+     */
+    engineRng?: (state: GameState) => Rng
   } = {},
 ): SimResult {
-  const rng = seededRng(seed)
+  const botRng = seededRng(`${seed}:bots`)
+  const engineStream = seededRng(`${seed}:engine`)
+  const engineRng = options.engineRng ?? (() => engineStream)
   const events: GameEvent[] = []
   const actionsTaken: SimResult['actionsTaken'] = []
 
   const apply = (state: GameState, seat: Seat, action: Action): GameState => {
-    const result = applyAction(state, seat, action, rng)
+    const result = applyAction(state, seat, action, engineRng(state))
     if ('error' in result) {
       throw new Error(`seed ${seed}: seat ${seat} ${JSON.stringify(action)} -> ${result.error}`)
     }
@@ -109,7 +117,7 @@ export function simulateGame(
     if (actionsTaken.length > MAX_SIM_ACTIONS) {
       throw new Error(`seed ${seed}: no result after ${MAX_SIM_ACTIONS} actions`)
     }
-    const move = chooseMove([playerView(state, 0), playerView(state, 1)], rng)
+    const move = chooseMove([playerView(state, 0), playerView(state, 1)], botRng)
     if (!move) throw new Error(`seed ${seed}: deadlock in phase ${state.phase}`)
     state = apply(state, move.seat, move.action)
   }
