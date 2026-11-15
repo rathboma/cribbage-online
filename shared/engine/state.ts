@@ -23,7 +23,10 @@ export interface PlayedCard {
 export interface PlayState {
   /** Running total of the current count, 0 to 31. */
   count: number
-  /** Whose turn it is to play or say go. */
+  /**
+   * Whose turn it is. In the `play` phase the engine guarantees this seat either has a card it
+   * can play or owes the go; outside the play the value is left over and means nothing.
+   */
   turn: Seat
   /** Cards laid since the count was last reset, oldest first. */
   sequence: PlayedCard[]
@@ -77,6 +80,7 @@ export interface GameState {
 }
 
 export type Action =
+  /** Server only: issued when the second player joins. Never accepted from a client. */
   | { type: 'start' }
   | { type: 'discard'; cards: [CardId, CardId] }
   | { type: 'cut' }

@@ -289,25 +289,37 @@ describe('start and deal', () => {
     ])
   })
 
-  it('alternates the deal when both players are ready', () => {
-    let { state } = act(createGame(), 0, { type: 'start' }, seededRng('alternate'))
-    const firstDealer = state.dealer
-    // Fast-forward to the show of hand 1 by swapping in a finished hand.
-    state = {
-      ...state,
-      phase: 'show',
-      ready: [false, false],
-    }
-    const once = act(state, 0, { type: 'ready' })
+  it('alternates the deal when both players are ready, and starts the next hand clean', () => {
+    const steps = ['1 7S', '0 8C', '1 8D', '0 2S', '1 3C', '0 go', '0 9H', '1 KH', '0 QD']
+    const show = script(
+      afterCut({
+        dealer: 0,
+        kept: ['8C 9H QD 2S', '7S 8D KH 3C'],
+        crib: ['4D 6S', 'JH AC'],
+        starter: '5H',
+      }).state,
+      steps,
+    ).state
+    expect(show.phase).toBe('show')
+
+    const once = act(show, 0, { type: 'ready' })
     expect(once.events).toEqual([])
     expect(act(once.state, 0, { type: 'ready' }).events).toEqual([]) // repeated ready: no-op
     const next = act(once.state, 1, { type: 'ready' }, seededRng('hand 2'))
-    expect(next.events).toEqual([{ type: 'hand_dealt', hand: 2, dealer: otherSeat(firstDealer) }])
-    expect(next.state.dealer).toBe(otherSeat(firstDealer))
-    expect(next.state.phase).toBe('discard')
-    expect(next.state.ready).toEqual([false, false])
-    expect(next.state.deck).toHaveLength(40)
-    expect(new Set([...next.state.hands.flat(), ...next.state.deck]).size).toBe(52)
+    expect(next.events).toEqual([{ type: 'hand_dealt', hand: 2, dealer: 1 }])
+    const s = next.state
+    expect(s.phase).toBe('discard')
+    expect(s.dealer).toBe(1)
+    expect(s.ready).toEqual([false, false])
+    expect(s.show).toEqual([])
+    expect(s.starter).toBeNull()
+    expect(s.kept).toEqual([[], []])
+    expect(s.discards).toEqual([[], []])
+    expect(s.play).toEqual({ count: 0, turn: 0, sequence: [], played: [[], []], goSaid: null })
+    expect(s.scores).toEqual(show.scores)
+    expect(s.previousScores).toEqual(show.previousScores)
+    expect(s.deck).toHaveLength(40)
+    expect(new Set([...s.hands.flat(), ...s.deck]).size).toBe(52)
   })
 })
 
@@ -344,6 +356,22 @@ describe('discard and cut', () => {
     expect(after.deck).toHaveLength(39)
     expect(after.deck).not.toContain(after.starter)
     expect(events[0]).toEqual({ type: 'starter_cut', card: after.starter })
+  })
+
+  it('cuts a different card for different random draws', () => {
+    const state = afterDiscard({
+      dealer: 0,
+      kept: ['8C 9H QD 2S', '7S 8D KH 3C'],
+      crib: ['4D 6S', 'JH AC'],
+      starter: '5H',
+    })
+    const starters = new Set(
+      Array.from(
+        { length: 10 },
+        (_, i) => act(state, 1, { type: 'cut' }, seededRng(i)).state.starter,
+      ),
+    )
+    expect(starters.size).toBeGreaterThan(5)
   })
 
   it('gives the dealer 2 for his heels when the starter is a jack', () => {
@@ -454,6 +482,29 @@ describe('the play', () => {
     expect(state.play.turn).toBe(1)
   })
 
+  it('scores 31 on the final card as 2, with no last-card point', () => {
+    const { events, state } = script(
+      afterCut({
+        dealer: 0,
+        kept: ['TD KS QS 9S', 'TC TH AC 2C'],
+        crib: ['2S 3S', '2H 3H'],
+        starter: '5H',
+      }).state,
+      ['1 TC', '0 TD', '1 TH', '0 go', '1 AC', '0 KS', '1 2C', '0 QS', '0 9S'],
+    )
+    expect(pointsFor(events, 0)).toEqual(['pair:2', 'thirtyone:2'])
+    expect(pointsFor(events, 1)).toEqual(['pair:6', 'thirtyone:2'])
+    expect(types(events).slice(-6)).toEqual([
+      'card_played',
+      'points',
+      'show_scored',
+      'show_scored',
+      'show_scored',
+      'hand_complete',
+    ])
+    expect(state.phase).toBe('show')
+  })
+
   it('scores a last card that also makes fifteen as 2 + 1, with one last-card point', () => {
     const { events } = script(
       afterCut({
@@ -526,6 +577,41 @@ describe('winning', () => {
     expect(state.phase).toBe('game_over')
     expect(state.winner).toBe(0)
     expect(state.skunk).toBe('double')
+  })
+
+  it('ends the game on a last-card point: the show is never counted', () => {
+    // The dealer pegs the fifteen (118 -> 120), then the last card makes 121.
+    const steps = ['1 7S', '0 8C', '1 8D', '0 2S', '1 3C', '0 go', '0 9H', '1 KH', '0 QD']
+    const { state, events } = script(afterCut({ ...example, scores: [118, 57] }).state, steps)
+    expect(types(events).slice(-3)).toEqual(['card_played', 'points', 'game_over'])
+    expect(events.filter((e) => e.type === 'show_scored')).toEqual([])
+    expect(state.scores).toEqual([121, 60])
+    expect(state.skunk).toBe('double')
+  })
+
+  it('ends the game on a go point: no reset follows', () => {
+    // The pone pegs the pair (118 -> 120), then takes the go after the dealer's go.
+    const steps = ['1 7S', '0 8C', '1 8D', '0 2S', '1 3C', '0 go']
+    const { state, events } = script(afterCut({ ...example, scores: [40, 118] }).state, steps)
+    expect(types(events).slice(-3)).toEqual(['go', 'points', 'game_over'])
+    expect(state.winner).toBe(1)
+    expect(state.phase).toBe('game_over')
+  })
+
+  it('ends the game on a fifteen made by the last card: no last-card point follows', () => {
+    const { state, events } = script(
+      afterCut({
+        dealer: 0,
+        kept: ['TD 3D 2D 8D', 'TC 4C 2C 7C'],
+        crib: ['5S 6S', '5H 6H'],
+        starter: 'KH',
+        scores: [113, 30],
+      }).state,
+      ['1 TC', '0 TD', '1 4C', '0 3D', '1 2C', '0 2D', '1 7C', '0 8D'],
+    )
+    expect(pointsFor(events, 0)).toEqual(['pair:2', 'thirtyone:2', 'pair:2', 'fifteen:2'])
+    expect(types(events).slice(-2)).toEqual(['points', 'game_over'])
+    expect(state.scores[0]).toBe(121)
   })
 
   it('caps the score at 121', () => {
@@ -676,6 +762,21 @@ describe('illegal actions return an error and leave the state untouched', () => 
       expectError(state, seat, action, code)
     },
   )
+
+  it('answers must_play to a go from a player who can play, even when no go is possible', () => {
+    // The pone is out of cards and the dealer leads the new count holding JS.
+    const state = script(
+      afterCut({
+        dealer: 0,
+        kept: ['TD KS QS JS', 'TC TH AC 2C'],
+        crib: ['2S 3S', '2H 3H'],
+        starter: '5H',
+      }).state,
+      ['1 TC', '0 TD', '1 TH', '0 go', '1 AC', '0 KS', '1 2C', '0 QS'],
+    ).state
+    expect(state.hands[1]).toEqual([])
+    expectError(state, 0, GO, 'must_play')
+  })
 
   it('rejects a card that would take the count past 31 as illegal_play', () => {
     // At 28 the dealer is on turn holding 9H and QD and must say go; force a pone turn at 25.

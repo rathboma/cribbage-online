@@ -230,12 +230,12 @@ function play(
 function go(s: GameState, seat: Seat, events: GameEvent[]): EngineErrorCode | null {
   if (s.phase !== 'play') return 'wrong_phase'
   if (seat !== s.play.turn) return 'not_your_turn'
+  if (canPlay(s, seat)) return 'must_play'
   const opponent = otherSeat(seat)
   if (s.hands[seat].length === 0 || s.hands[opponent].length === 0 || s.play.goSaid === opponent) {
-    // The engine resolves these by itself, so a go is never needed here.
+    // Can't happen in a real game: the engine resolves these by itself.
     return 'go_not_needed'
   }
-  if (canPlay(s, seat)) return 'must_play'
 
   s.play.goSaid = seat
   s.play.turn = opponent
