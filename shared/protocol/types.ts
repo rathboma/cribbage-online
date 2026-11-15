@@ -65,9 +65,16 @@ export interface SyncQuery {
  */
 export interface SyncResponse {
   status: GameStatus
-  /** Increases with every change to the game state. */
+  /**
+   * The game's current state version. Once a response includes `view`, send this back as `v`
+   * so the next sync can leave the view out if nothing changed.
+   */
   version: number
-  /** Omitted when the caller's `v` is already current. */
+  /**
+   * The state after every event in the game so far. Omitted when the caller's `v` is already
+   * current, and while `more` is true: a truncated page's events are older than the current
+   * state, so the view only comes with the final page.
+   */
   view?: PlayerView
   /** In id order. */
   events: ServerEvent[]
@@ -83,9 +90,14 @@ export interface SyncResponse {
 /** POST /api/games/:code/actions. Answers with a SyncResponse. */
 export interface ActionRequest {
   action: ClientAction
-  /** The hand number the client believes it is acting in; stale actions are refused. */
+  /**
+   * The hand number the client believes it is acting in. This is the staleness guard: an
+   * action for another hand is refused (409 stale_action) and nothing is written.
+   */
   hand: number
+  /** As in sync: only used to build the response, never to refuse the action. */
   cursor: number
+  /** As in sync: only used to build the response, never to refuse the action. */
   v: number
 }
 

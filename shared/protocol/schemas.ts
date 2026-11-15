@@ -43,7 +43,11 @@ export const cardIdSchema = z.custom<CardId>((value) => isCardId(value), {
 
 /** A non-negative whole number, as JSON or (with `coerce`) from a query string. */
 const counter = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
-const queryCounter = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+/** Digits only: "", "0x10", "1e3" or " 7" are errors, never quietly a number. */
+const queryCounter = z
+  .string()
+  .regex(/^\d{1,15}$/, 'Expected a whole number.')
+  .transform(Number)
 
 export const createGameRequestSchema = z.strictObject({
   name: playerNameSchema,
@@ -57,7 +61,8 @@ export const joinGameRequestSchema = z.strictObject({
   videoOn: z.boolean().optional(),
 }) satisfies z.ZodType<JoinGameRequest>
 
-export const syncQuerySchema = z.strictObject({
+/** Unknown query parameters (e.g. a cache-buster) are ignored. */
+export const syncQuerySchema = z.object({
   cursor: queryCounter.optional(),
   v: queryCounter.optional(),
 }) satisfies z.ZodType<SyncQuery>

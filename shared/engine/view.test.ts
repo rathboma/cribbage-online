@@ -182,6 +182,107 @@ describe('playerView', () => {
     })
   })
 
+  it('shows who has discarded, from both seats', () => {
+    const dealt = apply(createGame(), 0, { type: 'start' }, seededRng('flags'))
+    const pone = otherSeat(dealt.dealer)
+    const half = apply(dealt, pone, {
+      type: 'discard',
+      cards: dealt.hands[pone].slice(0, 2) as [CardId, CardId],
+    })
+    const expected: Pair<boolean> = [pone === 0, pone === 1]
+    for (const seat of SEATS) {
+      const view = playerView(half, seat)
+      expect(view.hasDiscarded).toEqual(expected)
+      expect(view.legal.discard).toBe(seat !== pone)
+      expect(view.myDiscards).toHaveLength(seat === pone ? 2 : 0)
+      expect(view.myHand).toHaveLength(seat === pone ? 4 : 6)
+      expect(view.cribCount).toBe(2)
+    }
+  })
+
+  it('shows who said go and whose turn it is, from both seats', () => {
+    // Dealer 0 says go at 25; the pone (1) plays on.
+    let state: GameState = {
+      ...example(),
+      hands: [
+        ['KD', 'QD', 'JD', '9C'],
+        ['KC', '5C', '2C', '2D'],
+      ],
+      kept: [
+        ['KD', 'QD', 'JD', '9C'],
+        ['KC', '5C', '2C', '2D'],
+      ],
+      discards: [
+        ['3S', '4S'],
+        ['6H', '7H'],
+      ],
+      deck: [
+        '5H',
+        ...cardIds(fullDeck()).filter(
+          (c) =>
+            ![
+              'KD',
+              'QD',
+              'JD',
+              '9C',
+              'KC',
+              '5C',
+              '2C',
+              '2D',
+              '3S',
+              '4S',
+              '6H',
+              '7H',
+              '5H',
+            ].includes(c),
+        ),
+      ],
+    }
+    state = apply(state, 1, { type: 'cut' })
+    for (const [seat, action] of [
+      [1, { type: 'play', card: 'KC' }],
+      [0, { type: 'play', card: 'KD' }],
+      [1, { type: 'play', card: '5C' }],
+      [0, { type: 'go' }],
+    ] as [Seat, Action][]) {
+      state = apply(state, seat, action)
+    }
+    for (const seat of SEATS) {
+      const view = playerView(state, seat)
+      expect(view.saidGo).toEqual([true, false])
+      expect(view.turn).toBe(1)
+      expect(view.count).toBe(25)
+      expect(view.scores).toEqual([2, 0])
+      expect(view.previousScores).toEqual([0, 0])
+    }
+    expect(playerView(state, 1).legal.playable).toEqual(['2C', '2D'])
+    expect(playerView(state, 0).legal).toEqual({
+      discard: false,
+      cut: false,
+      playable: [],
+      go: false,
+      ready: false,
+    })
+  })
+
+  it('keeps each seat’s rear peg apart from the front peg', () => {
+    const view = playerView(scriptedHand().at(-1)!, 1)
+    expect(view.scores).toEqual([17, 9])
+    expect(view.previousScores).toEqual([7, 3])
+  })
+
+  it('offers nothing when the server says the game can no longer be played', () => {
+    const state = scriptedHand()[1]! // the pone is on turn to lead
+    expect(playerView(state, 1).legal.playable).toHaveLength(4)
+    expect(playerView(state, 1, { canAct: false }).legal).toEqual({
+      discard: false,
+      cut: false,
+      playable: [],
+      go: false,
+      ready: false,
+    })
+  })
+
   it('is plain JSON that shares nothing with the state', () => {
     const state = scriptedHand().at(-1)!
     const view = playerView(state, 0)

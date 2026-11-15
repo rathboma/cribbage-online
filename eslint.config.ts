@@ -21,9 +21,11 @@ function sharedImports({ allowZod }: { allowZod: boolean }) {
         name,
         message: 'shared/ is used by the server too: no client frameworks.',
       })),
-      ...(allowZod ? [] : [{ name: 'zod', message: 'Only shared/protocol/schemas.ts uses zod.' }]),
     ],
     patterns: [
+      ...(allowZod
+        ? []
+        : [{ regex: '^zod(/|$)', message: 'Only shared/protocol/schemas.ts uses zod.' }]),
       noAliasImports,
       { regex: '^(node|cloudflare):', message: 'shared/ must not depend on a platform API.' },
     ],
@@ -36,7 +38,7 @@ export default defineConfigWithVueTs(
     files: ['**/*.{ts,mts,vue}'],
   },
 
-  globalIgnores(['**/dist/**', '**/coverage/**', '**/.wrangler/**']),
+  globalIgnores(['**/dist/**', '**/coverage/**', '**/.wrangler/**', '.claude/**']),
 
   js.configs.recommended,
   ...pluginVue.configs['flat/essential'],
@@ -99,8 +101,10 @@ export default defineConfigWithVueTs(
       'no-restricted-imports': [
         'error',
         {
-          paths: [{ name: 'zod', message: zodMessage }],
-          patterns: [{ regex: 'protocol/schemas', message: zodMessage }],
+          patterns: [
+            { regex: '^zod(/|$)', message: zodMessage },
+            { regex: 'protocol/schemas', message: zodMessage },
+          ],
         },
       ],
     },

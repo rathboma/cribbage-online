@@ -12,7 +12,7 @@
     "dev": "yarn -s db:migrate:local && run-p --race dev:api dev:client",
     "dev:client": "vite",
     "dev:api": "wrangler pages dev --ip 127.0.0.1 --port 8788 --show-interactive-dev-session=false",
-    "build": "vite build && node scripts/check-client-bundle.ts && yarn -s build:functions",
+    "build": "vite build && yarn -s build:functions",
     "build:functions": "wrangler pages functions build --outdir .wrangler/functions-build",
     "preview": "vite preview",
     "preview:pages": "yarn build && yarn -s db:migrate:local && wrangler pages dev",
@@ -29,7 +29,7 @@
     "pinia": "^4.1.0",
     "vue": "^3.5.45",
     "vue-router": "^5.5.1",
-    "zod": "^4"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.8.2",

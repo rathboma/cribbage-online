@@ -10,7 +10,8 @@ const GAME_CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{${GAME_CODE_LENGT
 
 /** Upper-cases and strips whitespace and dashes, so "bcd fg" and "BCD-FG" both become "BCDFG". */
 export function normalizeGameCode(input: string): string {
-  return input.replace(/[\s-]+/g, '').toUpperCase()
+  // ASCII only: toUpperCase() would turn "ß" into "SS" and make a valid-looking code.
+  return input.replace(/[\s-]+/g, '').replace(/[a-z]/g, (c) => c.toUpperCase())
 }
 
 /** True only for a code already in canonical form, e.g. "BCDFG" (not "bcdfg"). */

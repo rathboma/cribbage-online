@@ -33,7 +33,7 @@ describe('game codes', () => {
     expect(parseGameCode('zxwvt')).toBe('ZXWVT')
   })
 
-  it.each(['BCDF', 'BCDFGH', 'ABCDF', 'BCDFY', 'BCDF1', '', 'BC FG!', 'HELLO'])(
+  it.each(['BCDF', 'BCDFGH', 'ABCDF', 'BCDFY', 'BCDF1', '', 'BC FG!', 'HELLO', 'bcdß', 'bcdﬀ'])(
     'rejects %j',
     (input) => {
       expect(parseGameCode(input)).toBeNull()

@@ -63,12 +63,22 @@ describe('syncQuerySchema', () => {
     expect(syncQuerySchema.parse({})).toEqual({})
   })
 
-  it.each([[{ cursor: '-1' }], [{ cursor: 'abc' }], [{ v: '1.5' }], [{ since: '3' }]])(
-    'rejects %j',
-    (query) => {
-      expect(syncQuerySchema.safeParse(query).success).toBe(false)
-    },
-  )
+  it('ignores unknown parameters', () => {
+    expect(syncQuerySchema.parse({ cursor: '4', _: '123' })).toEqual({ cursor: 4 })
+  })
+
+  it.each([
+    [{ cursor: '-1' }],
+    [{ cursor: 'abc' }],
+    [{ v: '1.5' }],
+    [{ cursor: '' }],
+    [{ cursor: ' 7' }],
+    [{ cursor: '0x10' }],
+    [{ cursor: '1e3' }],
+    [{ cursor: 7 }],
+  ])('rejects %j', (query) => {
+    expect(syncQuerySchema.safeParse(query).success).toBe(false)
+  })
 })
 
 describe('actionRequestSchema', () => {

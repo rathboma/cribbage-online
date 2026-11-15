@@ -16,7 +16,8 @@ export interface LegalActions {
   cut: boolean
   /** Cards that may be played now. Empty when it isn't this seat's turn to play. */
   playable: CardId[]
-  /** Must say go: on turn, holding cards, none of them playable. */
+  /** Must say go: on turn, holding cards, none of them playable (and the opponent holds cards
+   * and hasn't said go, which the engine guarantees whenever this seat is on turn). */
   go: boolean
   /** May acknowledge the show to start the next hand. */
   ready: boolean
@@ -72,7 +73,15 @@ export interface PlayerView {
   legal: LegalActions
 }
 
-export function playerView(state: GameState, seat: Seat): PlayerView {
+/**
+ * The view of the game for `seat`. Pass `canAct: false` when the game is no longer being
+ * played (finished, abandoned or expired on the server), so `legal` offers nothing.
+ */
+export function playerView(
+  state: GameState,
+  seat: Seat,
+  options: { canAct?: boolean } = {},
+): PlayerView {
   const opponent = otherSeat(seat)
   const cribShown = state.show.some((r) => r.source === 'crib')
   const cribCount = state.discards[0].length + state.discards[1].length
@@ -104,8 +113,12 @@ export function playerView(state: GameState, seat: Seat): PlayerView {
     })),
     winner: state.winner,
     skunk: state.skunk,
-    legal: legalActions(state, seat),
+    legal: options.canAct === false ? noActions() : legalActions(state, seat),
   }
+}
+
+function noActions(): LegalActions {
+  return { discard: false, cut: false, playable: [], go: false, ready: false }
 }
 
 /**
@@ -113,7 +126,7 @@ export function playerView(state: GameState, seat: Seat): PlayerView {
  * accepted there. (A repeated `ready` is also accepted there, as a no-op, but isn't offered.)
  */
 export function legalActions(state: GameState, seat: Seat): LegalActions {
-  const none: LegalActions = { discard: false, cut: false, playable: [], go: false, ready: false }
+  const none = noActions()
   switch (state.phase) {
     case 'discard':
       return { ...none, discard: state.discards[seat].length === 0 }
