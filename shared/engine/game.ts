@@ -286,7 +286,7 @@ function endCount(s: GameState, events: GameEvent[], awardPoint = true): void {
 
   if (awardPoint) {
     const item = handOver
-      ? pegItem('last_card', PEG_POINTS.lastCard, [parseCard(last.card)])
+      ? pegItem('last_card', PEG_POINTS.last_card, [parseCard(last.card)])
       : pegItem('go', PEG_POINTS.go, [parseCard(last.card)])
     if (!award(s, last.seat, [item], events)) return
   }

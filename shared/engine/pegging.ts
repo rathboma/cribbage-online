@@ -3,7 +3,7 @@
  * Rules: cribbage_rules.md section 5. When go, last card and his heels are awarded is decided
  * by the game state machine; this module only scores the card itself.
  */
-import { cardId, cardValue, sameCard, type Card, type CardId } from './cards'
+import { cardId, cardValue, type Card, type CardId } from './cards'
 
 export type PegKind = 'fifteen' | 'thirtyone' | 'pair' | 'run' | 'go' | 'last_card' | 'heels'
 
@@ -16,16 +16,22 @@ export interface PegItem {
 
 export const MAX_COUNT = 31
 
+/**
+ * Fixed point values outside the show, keyed by item kind. Every count ends with exactly one
+ * award to the player of its last card: the `thirtyone` item that `scorePlay` returns when the
+ * card makes 31, or otherwise a `go` (or `last_card`) item added by the state machine. Never both.
+ */
 export const PEG_POINTS = {
   fifteen: 2,
+  /** Also the end-of-count award for that count: no go or last-card point on top. */
   thirtyone: 2,
   /** For the player of the last card of a count that ended below 31. */
   go: 1,
   /** For the player of the final card of the hand, when it doesn't make 31. */
-  lastCard: 1,
+  last_card: 1,
   /** For the dealer when the starter is a jack. */
   heels: 2,
-} as const
+} as const satisfies Partial<Record<PegKind, number>>
 
 /** Pair (2), pair royal (6), double pair royal (12): alternatives, not cumulative. */
 export const PAIR_POINTS: Readonly<Record<2 | 3 | 4, number>> = { 2: 2, 3: 6, 4: 12 }
@@ -43,16 +49,20 @@ export function legalPlays<T extends Card>(hand: readonly T[], count: number): T
 /**
  * Scores `card` played on top of `sequence` (the cards played since the last reset, oldest
  * first). Returns the new count and the items in the order they are announced: fifteen or
- * thirty-one, then pair, then run. Throws if the card would take the count above 31.
+ * thirty-one, then pair, then run. A `thirtyone` item is that count's end-of-count award, so the
+ * caller must not add a go or last-card point for it.
+ *
+ * Throws on input the state machine never produces: a repeated card, or a count above 31.
+ * Validate client input before calling it.
  */
 export function scorePlay(
   sequence: readonly Card[],
   card: Card,
 ): { count: number; items: PegItem[] } {
-  if (sequence.some((c) => sameCard(c, card))) {
-    throw new Error(`${cardId(card)} has already been played in this count`)
-  }
   const played = [...sequence, card]
+  if (new Set(played.map(cardId)).size !== played.length) {
+    throw new Error(`A card appears twice in the count: ${played.map(cardId).join(' ')}`)
+  }
   const count = countOf(played)
   if (count > MAX_COUNT) throw new Error(`${cardId(card)} would take the count to ${count}`)
 

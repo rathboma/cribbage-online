@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cardId, cardValue, fullDeck, parseCard, SUITS, type Card, type Suit } from './cards'
 import { seededRng, shuffle } from './rng'
-import { countOf, legalPlays, scorePlay, type PegItem } from './pegging'
+import { countOf, legalPlays, PAIR_POINTS, PEG_POINTS, scorePlay, type PegItem } from './pegging'
 
 /**
  * Builds distinct cards from ranks written as in the rules ("A", "2" ... "T", "J", "Q", "K"),
@@ -51,6 +51,9 @@ describe('scorePlay test vectors (issue #10)', () => {
     ['9 8 7', '7', 31, 4, ['thirtyone:2', 'pair:2']],
     ['K', 'Q', 20, 0, []],
     ['6 7 8', '9', 30, 4, ['run:4']],
+    // A repeated rank fills the gap but breaks the run.
+    ['4 6', '6', 16, 2, ['pair:2']],
+    ['3 5 5', '6', 19, 0, []],
   ] as const)('%s then %s: count %i, %i points', (sequence, card, count, points, items) => {
     const result = scoreOf(sequence, card)
     expect(result.count).toBe(count)
@@ -103,6 +106,12 @@ describe('scorePlay items', () => {
     ])
   })
 
+  it('lists all four cards of a double pair royal in one item worth 12', () => {
+    expect(scoreOf('7 7 7', '7').items).toEqual([
+      { kind: 'pair', points: 12, cards: ['7C', '7D', '7H', '7S'] },
+    ])
+  })
+
   it('lists the run cards in the order they were played', () => {
     expect(scoreOf('4 2 6 5', '3').items).toEqual([
       { kind: 'run', points: 5, cards: ['4C', '2C', '6C', '5C', '3C'] },
@@ -135,6 +144,15 @@ describe('scorePlay rules', () => {
     expect(() => scoreOf('K Q 5', '7')).toThrow()
     expect(() => scorePlay([parseCard('5H')], parseCard('5H'))).toThrow()
   })
+
+  it('refuses a sequence that already repeats a card', () => {
+    expect(() => scorePlay(['5C', '5C', '5D', '5H'].map(parseCard), parseCard('5S'))).toThrow()
+  })
+
+  it('uses the point values in cribbage_rules.md section 5', () => {
+    expect(PEG_POINTS).toEqual({ fifteen: 2, thirtyone: 2, go: 1, last_card: 1, heels: 2 })
+    expect(PAIR_POINTS).toEqual({ 2: 2, 3: 6, 4: 12 })
+  })
 })
 
 describe('legalPlays', () => {
@@ -163,31 +181,35 @@ describe('legalPlays', () => {
   })
 })
 
-describe('scorePlay over random legal counts', () => {
-  /** Independent check of one played card, straight from the rules text. */
-  function expected(sequence: Card[], card: Card) {
+describe('scorePlay over random legal plays', () => {
+  /** Independent scoring of one played card, items and all, straight from the rules text. */
+  function expected(sequence: Card[], card: Card): { count: number; items: PegItem[] } {
     const played = [...sequence, card]
-    const count = countOf(played)
+    const ids = played.map(cardId)
+    const count = played.reduce((t, c) => t + cardValue(c), 0)
+    const items: PegItem[] = []
+    if (count === 15) items.push({ kind: 'fifteen', points: 2, cards: ids })
+    if (count === 31) items.push({ kind: 'thirtyone', points: 2, cards: ids })
     let same = 1
     while (same < played.length && played[played.length - 1 - same]!.rank === card.rank) same++
+    if (same >= 2)
+      items.push({ kind: 'pair', points: [0, 0, 2, 6, 12][same]!, cards: ids.slice(-same) })
     let run = 0
     for (let n = 3; n <= played.length; n++) {
-      const ranks = played.slice(-n).map((c) => c.rank)
-      const sorted = [...ranks].sort((a, b) => a - b)
+      const sorted = played
+        .slice(-n)
+        .map((c) => c.rank)
+        .sort((a, b) => a - b)
       if (sorted.every((r, i) => i === 0 || r === sorted[i - 1]! + 1)) run = n
     }
-    return {
-      count,
-      fifteen: count === 15 ? 2 : 0,
-      thirtyone: count === 31 ? 2 : 0,
-      pair: [0, 0, 2, 6, 12][same]!,
-      run,
-    }
+    if (run) items.push({ kind: 'run', points: run, cards: ids.slice(-run) })
+    return { count, items }
   }
 
-  it('agrees with an independent check for 20,000 counts', () => {
+  it('agrees with an independent implementation on about 18,000 plays', () => {
     const rng = seededRng('peg-sample')
     const mismatches: unknown[] = []
+    let plays = 0
     for (let game = 0; game < 2000; game++) {
       // Play random legal cards from a shuffled deck until nothing fits, a few times over.
       let deck = shuffle(fullDeck(), rng)
@@ -200,16 +222,28 @@ describe('scorePlay over random legal counts', () => {
         }
         const card = options[rng.nextInt(options.length)]!
         deck = deck.filter((c) => c !== card)
-        const result = scorePlay(sequence, card)
-        const got = { count: result.count, fifteen: 0, thirtyone: 0, pair: 0, run: 0 }
-        for (const item of result.items) got[item.kind as 'fifteen'] += item.points
+        const got = scorePlay(sequence, card)
         const want = expected(sequence, card)
         if (JSON.stringify(got) !== JSON.stringify(want)) {
           mismatches.push({ sequence: sequence.map(cardId), card: cardId(card), got, want })
         }
         sequence = [...sequence, card]
+        plays++
       }
     }
     expect(mismatches.slice(0, 5)).toEqual([])
+    expect(plays).toBeGreaterThan(15_000)
+  })
+
+  it('agrees on every run of same-rank cards, up to four of a kind', () => {
+    for (const rank of ['A', '3', '5', '7']) {
+      // four tens would pass 31
+      const cards = play(`${rank} ${rank} ${rank} ${rank}`)
+      for (let n = 1; n < 4; n++) {
+        expect(scorePlay(cards.slice(0, n), cards[n]!)).toEqual(
+          expected(cards.slice(0, n), cards[n]!),
+        )
+      }
+    }
   })
 })
