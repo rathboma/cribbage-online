@@ -23,6 +23,27 @@ describe('TextInput', () => {
     expect(wrapper.props('modelValue')).toBe('Bo')
   })
 
+  it('cleans typed and pasted text with a filter, showing the result at once', async () => {
+    let value = 'BC'
+    const wrapper = mount(TextInput, {
+      props: {
+        label: 'Code',
+        modelValue: value,
+        filter: (v: string) => v.toUpperCase().replace(/[^A-Z]/g, ''),
+        'onUpdate:modelValue': (v: string) => {
+          value = v
+          return wrapper.setProps({ modelValue: v })
+        },
+      },
+    })
+    const input = wrapper.get('input')
+    await input.setValue('bc1')
+    expect(value).toBe('BC')
+    expect((input.element as HTMLInputElement).value).toBe('BC')
+    await input.setValue('bc-dfg')
+    expect(value).toBe('BCDFG')
+  })
+
   it('passes attributes such as maxlength and autocomplete to the input', () => {
     const wrapper = mount(TextInput, {
       props: { label: 'Name' },

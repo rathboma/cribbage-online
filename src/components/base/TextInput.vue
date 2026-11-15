@@ -10,6 +10,11 @@ const props = defineProps<{
   hint?: string
   /** Error shown under the field; marks the input invalid. */
   error?: string | null
+  /**
+   * Cleans what is typed or pasted before it reaches the model, e.g. upper-casing a game code
+   * and dropping characters it can't contain. The field shows the cleaned text at once.
+   */
+  filter?: (value: string) => string
 }>()
 
 const model = defineModel<string>({ default: '' })
@@ -29,6 +34,14 @@ const describedBy = computed(
 )
 
 const input = ref<HTMLInputElement | null>(null)
+
+function onInput(event: Event) {
+  const el = event.target as HTMLInputElement
+  const value = props.filter ? props.filter(el.value) : el.value
+  // Show the cleaned value even when it equals the model (a rejected keystroke).
+  if (el.value !== value) el.value = value
+  model.value = value
+}
 defineExpose({ focus: () => input.value?.focus(), select: () => input.value?.select() })
 </script>
 
@@ -43,10 +56,11 @@ defineExpose({ focus: () => input.value?.focus(), select: () => input.value?.sel
       ref="input"
       v-bind="inputAttrs"
       :id="id"
-      v-model="model"
+      :value="model"
       class="text-input__field"
       :aria-invalid="error ? true : undefined"
       :aria-describedby="describedBy"
+      @input="onInput"
     />
     <p v-if="hint" :id="`${id}-hint`" class="text-input__hint">{{ hint }}</p>
     <p v-if="error" :id="`${id}-error`" class="text-input__error" role="alert">{{ error }}</p>

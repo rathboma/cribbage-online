@@ -1,6 +1,13 @@
 import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 import { parseGameCode } from '@shared/protocol'
+import { loadSession } from '@/api/session'
 import LandingView from '@/views/LandingView.vue'
+
+/** The game screen needs this browser's seat: without a session, offer to join instead. */
+function requireSession(to: RouteLocationNormalized) {
+  const code = String(to.params.code)
+  return loadSession(code) ? true : { name: 'join-code', params: { code } }
+}
 
 /** Rewrites /j/bcd-fg to /j/BCDFG, so every screen sees the canonical code. */
 function canonicalCode(to: RouteLocationNormalized) {
@@ -38,7 +45,7 @@ export const routes: RouteRecordRaw[] = [
     name: 'game',
     component: () => import('@/views/GameView.vue'),
     props: true,
-    beforeEnter: canonicalCode,
+    beforeEnter: [canonicalCode, requireSession],
     meta: { title: (route: RouteLocationNormalized) => `Game ${String(route.params.code)}` },
   },
   // Client-side "not found". There is deliberately no static 404.html in the build:
