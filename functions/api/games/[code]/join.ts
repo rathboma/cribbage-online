@@ -6,9 +6,9 @@ import { applyAction } from '../../../../shared/engine'
 import type { JoinGameResponse } from '../../../../shared/protocol'
 import { joinGameRequestSchema } from '../../../../shared/protocol/schemas'
 import { generateToken, hashToken } from '../../../../server/auth/tokens'
-import { joinGame, readSync } from '../../../../server/db'
+import { joinGame } from '../../../../server/db'
 import type { Env } from '../../../../server/env'
-import { ACTIVE_TTL_MS, codeFromParam, gameNotFound, isExpired } from '../../../../server/games'
+import { ACTIVE_TTL_MS, codeFromParam, readLiveGame } from '../../../../server/games'
 import { HttpError, json, readBody } from '../../../../server/http'
 import { gameRng } from '../../../../server/rng'
 
@@ -28,8 +28,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const now = Date.now()
-    const snapshot = await readSync(env.DB, code, { seat: 1 }, 0, 0)
-    if (!snapshot || isExpired(snapshot.game, now)) throw gameNotFound()
+    const snapshot = await readLiveGame(env.DB, code, now)
     const { game } = snapshot
     if (game.status === 'finished' || game.status === 'abandoned') {
       throw new HttpError(410, 'game_ended', 'That game has already ended.')

@@ -7,7 +7,7 @@ import type {
   JoinGameResponse,
   LookupGameResponse,
 } from '../../shared/protocol'
-import { getGame, latestEventId, listEventsSince, listPlayers, setStatus } from '../db'
+import { appendEvent, getGame, listEventsSince, listPlayers, setStatus } from '../db'
 import { ACTIVE_TTL_MS, WAITING_TTL_MS } from '../games'
 import { hashToken } from '../auth/tokens'
 import { gameRng } from '../rng'
@@ -48,6 +48,29 @@ describe('POST /api/games', () => {
     expect((await getGame(env.DB, res.body.code))?.expiresAt).toBe(
       1_800_000_000_000 + WAITING_TTL_MS,
     )
+  })
+
+  it('picks another code when the random one is taken', async () => {
+    const taken = (await create()).body.code
+    // Make the next five letter draws spell the taken code; later draws are real randomness.
+    const letters = 'BCDFGHJKLMNPQRSTVWXZ'
+    const queue = [...taken].map((c) => letters.indexOf(c))
+    const original = crypto.getRandomValues.bind(crypto)
+    const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation(((array: Uint32Array) => {
+      if (array instanceof Uint32Array && array.length === 1 && queue.length) {
+        array[0] = queue.shift()!
+        return array
+      }
+      return original(array)
+    }) as typeof crypto.getRandomValues)
+    try {
+      const res = await create()
+      expect(queue).toEqual([]) // the taken code was really drawn
+      expect(res.status).toBe(201)
+      expect(res.body.code).not.toBe(taken)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('trims the name', async () => {
@@ -113,6 +136,15 @@ describe('GET /api/games/:code', () => {
     expect(res.body.error.code).toBe('game_not_found')
   })
 
+  it('treats a game as expired from the exact moment it expires', async () => {
+    const created = await create()
+    const { expiresAt } = (await getGame(env.DB, created.body.code))!
+    vi.useFakeTimers({ now: expiresAt - 1, toFake: ['Date'] })
+    expect((await api('GET', `/api/games/${created.body.code}`)).status).toBe(200)
+    vi.setSystemTime(expiresAt)
+    expect((await api('GET', `/api/games/${created.body.code}`)).status).toBe(404)
+  })
+
   it('answers 404 for an expired game', async () => {
     const created = await create()
     vi.useFakeTimers({ now: Date.now() + WAITING_TTL_MS + 1, toFake: ['Date'] })
@@ -141,11 +173,17 @@ describe('POST /api/games/:code/join', () => {
     expect(players[1]).toMatchObject({ seat: 1, name: 'Bo', chatOn: false, videoOn: true })
   })
 
-  it('gives the guest a cursor from which the opening events are delivered', async () => {
+  it('gives the guest a cursor just before the opening events', async () => {
     const created = await create()
-    const before = await latestEventId(env.DB, created.body.code)
+    // An earlier event (e.g. a system notice) must not be replayed, nor the opening skipped.
+    const earlier = (await appendEvent(
+      env.DB,
+      created.body.code,
+      { kind: 'system', payload: { note: 'before the join' } },
+      Date.now(),
+    )) as number
     const res = await join(created.body.code)
-    expect(res.body.cursor).toBe(before)
+    expect(res.body.cursor).toBe(earlier)
     const events = await listEventsSince(env.DB, created.body.code, res.body.cursor, 1, 100)
     expect(events).toHaveLength(1)
     const [opening] = events
@@ -154,6 +192,13 @@ describe('POST /api/games/:code/join', () => {
       'cut_for_deal',
       'hand_dealt',
     ])
+  })
+
+  it('turns chat on and video off for a guest who doesn’t choose', async () => {
+    const created = await create()
+    await join(created.body.code, { name: 'Bo' })
+    const guest = (await listPlayers(env.DB, created.body.code))[1]
+    expect(guest).toMatchObject({ chatOn: true, videoOn: false })
   })
 
   it('makes the game last 24 hours after the join', async () => {
@@ -185,13 +230,16 @@ describe('POST /api/games/:code/join', () => {
     expect((res.body as unknown as ApiError).error.code).toBe('game_full')
   })
 
-  it('answers 410 game_ended for a finished or abandoned game', async () => {
-    const created = await create()
-    await setStatus(env.DB, created.body.code, 0, { status: 'abandoned', now: Date.now() })
-    const res = await join(created.body.code)
-    expect(res.status).toBe(410)
-    expect((res.body as unknown as ApiError).error.code).toBe('game_ended')
-  })
+  it.each(['finished', 'abandoned'] as const)(
+    'answers 410 game_ended for a %s game',
+    async (status) => {
+      const created = await create()
+      await setStatus(env.DB, created.body.code, 0, { status, now: Date.now() })
+      const res = await join(created.body.code)
+      expect(res.status).toBe(410)
+      expect((res.body as unknown as ApiError).error.code).toBe('game_ended')
+    },
+  )
 
   it('answers 404 for an unknown or expired game', async () => {
     expect((await join('QQQQQ')).status).toBe(404)
@@ -238,6 +286,14 @@ describe('reproducible deals', () => {
       expect(draw(e)).not.toBe(draw(e))
     }
     expect(draw({ ENVIRONMENT: 'test' })).not.toBe(draw({ ENVIRONMENT: 'test' }))
+  })
+
+  it('derives the seed from the game code and the state version', () => {
+    const e = { ENVIRONMENT: 'test', TEST_SEED: 'x' }
+    const draw = (code: string, version: number) =>
+      Array.from({ length: 8 }, () => gameRng(e, code, version).nextInt(1_000_000)).join()
+    expect(draw('BCDFG', 3)).not.toBe(draw('BCDFG', 4))
+    expect(draw('BCDFG', 3)).not.toBe(draw('BCDFH', 3))
   })
 })
 

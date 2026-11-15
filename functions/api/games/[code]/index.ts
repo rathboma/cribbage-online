@@ -1,14 +1,13 @@
 /** GET /api/games/:code: public details for the join screen. No secrets, no game state. */
 import type { LookupGameResponse } from '../../../../shared/protocol'
-import { listPlayers } from '../../../../server/db'
 import type { Env } from '../../../../server/env'
-import { codeFromParam, loadLiveGame } from '../../../../server/games'
+import { codeFromParam, readLiveGame } from '../../../../server/games'
 import { json } from '../../../../server/http'
 
 export const onRequestGet: PagesFunction<Env> = async ({ params, env }) => {
   const code = codeFromParam(params.code)
-  const game = await loadLiveGame(env.DB, code, Date.now())
-  const players = await listPlayers(env.DB, code)
+  // Game and players from one snapshot, so a join can't land between the two reads.
+  const { game, players } = await readLiveGame(env.DB, code, Date.now())
   const host = players.find((p) => p.seat === 0)
   const response: LookupGameResponse = {
     code,

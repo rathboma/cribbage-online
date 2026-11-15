@@ -114,6 +114,28 @@ export default defineConfigWithVueTs(
     name: 'app/relative-imports-on-server',
     files: ['functions/**/*.ts', 'server/**/*.ts'],
     rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            noAliasImports,
+            {
+              // Routes get randomness from server/rng.ts, which only allows a seed in test and
+              // development. Importing seededRng directly would bypass that.
+              regex: 'shared/engine(/rng)?$',
+              importNames: ['seededRng'],
+              message: 'Use gameRng from server/rng.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    name: 'app/server-rng-and-tests',
+    files: ['server/rng.ts', 'server/**/*.test.ts', 'server/test/**'],
+    rules: {
       'no-restricted-imports': ['error', { patterns: [noAliasImports] }],
     },
   },

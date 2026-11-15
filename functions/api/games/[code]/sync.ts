@@ -5,9 +5,8 @@
  */
 import { syncQuerySchema } from '../../../../shared/protocol/schemas'
 import { requirePlayer, requireTokenHash } from '../../../../server/auth/session'
-import { readSync } from '../../../../server/db'
 import type { Env } from '../../../../server/env'
-import { codeFromParam, gameNotFound, isExpired } from '../../../../server/games'
+import { codeFromParam, readLiveGame } from '../../../../server/games'
 import { json, parse } from '../../../../server/http'
 import { buildSyncResponse, eventLimit, notePresence } from '../../../../server/sync'
 
@@ -17,8 +16,14 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, params, env })
   const tokenHash = await requireTokenHash(request)
   const now = Date.now()
 
-  const snapshot = await readSync(env.DB, code, { tokenHash }, query.cursor ?? 0, eventLimit(query))
-  if (!snapshot || isExpired(snapshot.game, now)) throw gameNotFound()
+  const snapshot = await readLiveGame(
+    env.DB,
+    code,
+    now,
+    { tokenHash },
+    query.cursor ?? 0,
+    eventLimit(query),
+  )
   const player = requirePlayer(snapshot.players, tokenHash)
 
   await notePresence(env.DB, player, now)

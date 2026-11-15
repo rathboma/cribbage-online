@@ -8,6 +8,8 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code: ApiErrorCode,
     message: string,
+    /** Extra response headers, e.g. Retry-After on a 429. */
+    readonly headers: Record<string, string> = {},
   ) {
     super(message)
   }
@@ -17,14 +19,19 @@ export function json(data: unknown, status = 200): Response {
   return Response.json(data, { status })
 }
 
-export function errorResponse(status: number, code: ApiErrorCode, message: string): Response {
+export function errorResponse(
+  status: number,
+  code: ApiErrorCode,
+  message: string,
+  headers: Record<string, string> = {},
+): Response {
   const body: ApiError = { error: { code, message } }
-  return json(body, status)
+  return Response.json(body, { status, headers })
 }
 
 /** Turns anything thrown by a route into the uniform JSON error shape. */
 export function toErrorResponse(err: unknown): Response {
-  if (err instanceof HttpError) return errorResponse(err.status, err.code, err.message)
+  if (err instanceof HttpError) return errorResponse(err.status, err.code, err.message, err.headers)
   console.error('Unhandled error in API route', err)
   return errorResponse(500, 'internal', 'Something went wrong on the server.')
 }

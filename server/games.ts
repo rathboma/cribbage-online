@@ -1,7 +1,7 @@
 /** Game lifecycle rules shared by the API routes: codes, expiry and loading a live game. */
 import { cryptoRng } from '../shared/engine'
 import { GAME_CODE_ALPHABET, GAME_CODE_LENGTH, parseGameCode } from '../shared/protocol'
-import { getGame, type GameRow } from './db'
+import { readSync, type GameRow, type SyncSnapshot, type Viewer } from './db'
 import { HttpError } from './http'
 
 /** A game waiting for its second player lasts an hour. */
@@ -26,11 +26,22 @@ export function codeFromParam(param: string | string[] | undefined): string {
   return code
 }
 
-/** Loads a game that exists and hasn't expired, or throws 404 `game_not_found`. */
-export async function loadLiveGame(db: D1Database, code: string, now: number): Promise<GameRow> {
-  const game = await getGame(db, code)
-  if (!game || isExpired(game, now)) throw gameNotFound()
-  return game
+/**
+ * Reads a live game (one that exists and hasn't expired) with its players and, for `viewer`,
+ * the events after `cursor`, all in one batch. Throws 404 `game_not_found` otherwise, so every
+ * route treats an expired game as missing.
+ */
+export async function readLiveGame(
+  db: D1Database,
+  code: string,
+  now: number,
+  viewer: Viewer = { seat: 0 },
+  cursor = 0,
+  limit = 0,
+): Promise<SyncSnapshot> {
+  const snapshot = await readSync(db, code, viewer, cursor, limit)
+  if (!snapshot || isExpired(snapshot.game, now)) throw gameNotFound()
+  return snapshot
 }
 
 export function isExpired(game: Pick<GameRow, 'expiresAt'>, now: number): boolean {
