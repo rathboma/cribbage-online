@@ -43,5 +43,24 @@ export default defineConfigWithVueTs(
     },
   },
 
+  {
+    // Wrangler bundles functions/ (and what it imports) without the Vite aliases.
+    name: 'app/relative-imports-outside-client',
+    files: ['shared/**/*.ts', 'functions/**/*.ts', 'server/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^@(shared)?/',
+              message: 'Use a relative import: aliases only work in the client build.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   skipFormatting,
 )

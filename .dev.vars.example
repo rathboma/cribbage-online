@@ -1,0 +1,2 @@
+# Local-only variables for `wrangler pages dev`. Copy to `.dev.vars` (git-ignored) and fill in.
+# Nothing is needed yet; later issues add entries here.

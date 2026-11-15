@@ -1,7 +1,13 @@
 // Tooling config files that run in Node.js.
 {
   "extends": "@tsconfig/node24/tsconfig.json",
-  "include": ["vite.config.*", "vitest.config.*", "eslint.config.*", "playwright.config.*"],
+  "include": [
+    "vite.config.*",
+    "vitest.config.*",
+    "eslint.config.*",
+    "playwright.config.*",
+    "server/test/global-setup.ts"
+  ],
   "compilerOptions": {
     "module": "preserve",
     "moduleResolution": "bundler",
