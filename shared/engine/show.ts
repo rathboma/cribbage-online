@@ -2,7 +2,17 @@
  * The show: scoring a four-card hand or crib together with the starter.
  * Rules: cribbage_rules.md section 6.
  */
-import { cardId, cardValue, JACK, sortCards, type Card, type CardId } from './cards'
+import {
+  cardId,
+  cardValue,
+  isCardId,
+  JACK,
+  parseCard,
+  sameCard,
+  sortCards,
+  type Card,
+  type CardId,
+} from './cards'
 
 export type ScoreKind = 'fifteen' | 'pair' | 'run' | 'flush' | 'nobs'
 
@@ -10,6 +20,11 @@ export type ScoreKind = 'fifteen' | 'pair' | 'run' | 'flush' | 'nobs'
 export interface ScoreItem {
   kind: ScoreKind
   points: number
+  /**
+   * Fifteens, pairs and runs list their cards by rank then suit, starter included. A flush lists
+   * the four hand cards in that order, then the starter if it matches; nobs lists the jack, then
+   * the starter.
+   */
   cards: CardId[]
 }
 
@@ -128,6 +143,12 @@ function nobs(hand: readonly Card[], starter: Card): ScoreItem[] {
 
 function assertValidShow(hand: readonly Card[], starter: Card): void {
   if (hand.length !== 4) throw new Error(`A hand has 4 cards, got ${hand.length}`)
+  for (const card of [...hand, starter]) {
+    // Rejects malformed cards such as { rank: '5', suit: 'H' } or { rank: 14, suit: 'X' }.
+    if (!isCardId(cardId(card)) || !sameCard(parseCard(cardId(card)), card)) {
+      throw new Error(`Not a card: ${JSON.stringify(card)}`)
+    }
+  }
   const ids = new Set([...hand, starter].map(cardId))
   if (ids.size !== 5) throw new Error('Hand and starter must be five different cards')
 }

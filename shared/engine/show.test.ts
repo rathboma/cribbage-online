@@ -146,8 +146,14 @@ describe('scoreHand rules', () => {
     expect(kindCounts(score('KH QD 2S 7C', '8S')).pair).toBeUndefined()
   })
 
-  it('does not depend on the order of the hand', () => {
-    expect(score('8S 5C JH 7D', 'AS')).toEqual(score('JH 7D 5C 8S', 'AS'))
+  it.each([
+    ['8S 5C JH 7D', 'AS'],
+    ['KH 9H 2H 6H', '3H'], // five-card flush
+    ['KH 9H 2H 6H', '3S'], // four-card flush
+    ['JD 4C 5S 6H', '9D'], // nobs and a run
+  ])('does not depend on the order of the hand: %s + %s', (hand, starter) => {
+    const reversed = hand.split(' ').reverse().join(' ')
+    expect(score(reversed, starter)).toEqual(score(hand, starter))
   })
 
   it('does not mutate its inputs', () => {
@@ -155,6 +161,18 @@ describe('scoreHand rules', () => {
     const starter = Object.freeze(parseCard('5C'))
     expect(scoreHand(hand, starter, false).total).toBe(29)
     expect(hand.map(cardId)).toEqual(['5H', '5D', '5S', 'JC'])
+  })
+
+  it('rejects malformed card objects', () => {
+    const good = cards('5H 5D 5S')
+    const bad = [
+      { rank: '5', suit: 'C' },
+      { rank: 14, suit: 'C' },
+      { rank: 2, suit: 'X' },
+    ]
+    for (const card of bad) {
+      expect(() => scoreHand([...good, card as unknown as Card], parseCard('KC'), false)).toThrow()
+    }
   })
 
   it('rejects anything but four distinct cards and a different starter', () => {
@@ -232,6 +250,12 @@ describe('scoreHand over a seeded random sample of 200,000 hands', () => {
       const starter = pool[4]!
       const isCrib = n % 2 === 1
       const result = scoreHand(hand, starter, isCrib)
+      if (n % 10 === 0) {
+        const again = scoreHand([...hand].reverse(), starter, isCrib)
+        if (JSON.stringify(again) !== JSON.stringify(result)) {
+          failures.push({ orderDependent: `${hand.map(cardId).join(' ')} + ${cardId(starter)}` })
+        }
+      }
 
       const byKind = { fifteen: 0, pair: 0, run: 0, flush: 0, nobs: 0 }
       for (const item of result.items) byKind[item.kind] += item.points
