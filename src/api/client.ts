@@ -28,11 +28,19 @@ export class ApiError extends Error {
     this.name = 'ApiError'
   }
 
-  /** The server says this game or this seat is gone for good: stop and forget the session. */
+  /**
+   * The server itself says this game is gone or this seat's token is no good: stop syncing and
+   * forget the session. Judged by the server's error code, never by the HTTP status alone: a
+   * proxy's 404 page or an unknown route must not cost a player their seat, and a move refused
+   * because the game has finished (410) is just a refused move.
+   */
   get isTerminal(): boolean {
-    return this.status === 401 || this.status === 404 || this.status === 410
+    return this.code === 'game_not_found' || this.code === 'unauthorized'
   }
 }
+
+/** How long a request may take before it counts as a network failure. */
+export const REQUEST_TIMEOUT_MS = 10_000
 
 export interface ApiClient {
   createGame(body: CreateGameRequest): Promise<CreateGameResponse>
@@ -43,10 +51,11 @@ export interface ApiClient {
 }
 
 export function createApiClient(
-  options: { baseUrl?: string; fetch?: typeof fetch } = {},
+  options: { baseUrl?: string; fetch?: typeof fetch; timeoutMs?: number } = {},
 ): ApiClient {
   const base = (options.baseUrl ?? '').replace(/\/$/, '')
   const doFetch = options.fetch ?? ((input, init) => fetch(input, init))
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
 
   async function request<T>(
     method: 'GET' | 'POST',
@@ -56,27 +65,39 @@ export function createApiClient(
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (init.body !== undefined) headers['Content-Type'] = 'application/json'
     if (init.token) headers.Authorization = `Bearer ${init.token}`
+    // A request that never answers would hold up everything queued behind it (polls and
+    // moves run one at a time), so it is given up on after a while.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     let res: Response
+    let body: unknown = null
     try {
       res = await doFetch(`${base}${path}`, {
         method,
         headers,
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        signal: controller.signal,
       })
+      try {
+        body = await res.json()
+      } catch (err) {
+        if (controller.signal.aborted) throw err
+        // Not JSON (e.g. a proxy error page); handled below.
+      }
     } catch (err) {
+      if (controller.signal.aborted) {
+        throw new ApiError(0, 'network', 'The server took too long to answer.')
+      }
       throw new ApiError(0, 'network', err instanceof Error ? err.message : 'Network error')
-    }
-    let body: unknown = null
-    try {
-      body = await res.json()
-    } catch {
-      // Not JSON (e.g. a proxy error page); handled below.
+    } finally {
+      clearTimeout(timer)
     }
     if (res.ok && body !== null) return body as T
     const error = (body as Partial<ApiErrorBody> | null)?.error
     throw new ApiError(
       res.status,
-      error?.code ?? (res.status >= 500 ? 'internal' : 'bad_request'),
+      // An answer that can't be read (even a 200) is the server's side going wrong.
+      error?.code ?? (res.status >= 500 || res.ok ? 'internal' : 'bad_request'),
       error?.message ?? `The server answered ${res.status}.`,
     )
   }

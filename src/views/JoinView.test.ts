@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import type { LookupGameResponse } from '@shared/protocol'
 import { takeStartCursor, useApiClient } from '@/api'
 import { ApiError, type ApiClient } from '@/api/client'
-import { loadLastName, loadSession, saveLastName, saveSession } from '@/api/session'
+import { loadLastName, loadSession, removeSession, saveLastName, saveSession } from '@/api/session'
 import App from '@/App.vue'
 import { routes } from '@/router/routes'
 
@@ -70,6 +70,44 @@ describe('join: entering the code', () => {
     await codeInput(wrapper).setValue(' bcd-fg ')
     await flushPromises()
     expect(lookupGame).toHaveBeenCalledWith('BCDFG')
+  })
+
+  it('takes the code out of a pasted share link, or the whole invitation', async () => {
+    const { wrapper } = await visit('/join')
+    await codeInput(wrapper).setValue('https://cribbage.example/j/BCDFG')
+    await flushPromises()
+    expect(lookupGame).toHaveBeenLastCalledWith('BCDFG')
+    expect(heading(wrapper)).toContain('Ada')
+
+    const second = await visit('/join')
+    await codeInput(second.wrapper).setValue(
+      'Play cribbage with me! Join with code BCDFG: https://cribbage.example/j/bcdfg',
+    )
+    await flushPromises()
+    expect(lookupGame).toHaveBeenLastCalledWith('BCDFG')
+    expect(lookupGame).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores the answer for a code that was edited while it was being checked', async () => {
+    const answers = new Map<string, (game: LookupGameResponse) => void>()
+    lookupGame.mockImplementation(
+      (code: string) => new Promise<LookupGameResponse>((resolve) => answers.set(code, resolve)),
+    )
+    const { wrapper } = await visit('/join')
+    await codeInput(wrapper).setValue('BCDFG')
+    await codeInput(wrapper).setValue('BCDF') // changed their mind
+    await codeInput(wrapper).setValue('BCDFH')
+    await flushPromises()
+    expect(lookupGame.mock.calls.map((c) => c[0])).toEqual(['BCDFG', 'BCDFH'])
+
+    // The first code's answer arrives late: it is not the game being asked about.
+    answers.get('BCDFG')?.({ ...open, hostName: 'Wrong game' })
+    await flushPromises()
+    expect(heading(wrapper)).toBe('Join a game')
+
+    answers.get('BCDFH')?.({ ...open, code: 'BCDFH', hostName: 'Bea' })
+    await flushPromises()
+    expect(heading(wrapper)).toContain('Bea')
   })
 
   it.each([
@@ -148,6 +186,46 @@ describe('join: your name', () => {
     expect(lookupGame).toHaveBeenCalledWith('BCDFG')
     expect(wrapper.findAll('input')).toHaveLength(1)
     expect(wrapper.get('label').text()).toBe('Your name')
+  })
+
+  it('says it is checking a share link instead of showing the code form', async () => {
+    let answer: (game: LookupGameResponse) => void = () => {}
+    lookupGame.mockImplementation(() => new Promise<LookupGameResponse>((r) => (answer = r)))
+    const { wrapper } = await visit('/j/BCDFG')
+    expect(wrapper.findAll('input')).toHaveLength(0)
+    expect(wrapper.get('main [role="status"]').text()).toBe('Checking the code…')
+    answer(open)
+    await flushPromises()
+    expect(wrapper.get('label').text()).toBe('Your name')
+  })
+
+  it('opens the game when it is "full" because this browser joined it in another tab', async () => {
+    const { wrapper, router } = await visit('/j/BCDFG')
+    // Meanwhile the same person joins from a second tab; this tab's form is still open.
+    saveSession('BCDFG', { playerToken: 'tok', seat: 1, name: 'Bo' })
+    joinGame.mockRejectedValueOnce(new ApiError(409, 'game_full', 'full'))
+    await wrapper.get('input').setValue('Bo')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/g/BCDFG')
+  })
+
+  it('still seats a player whose browser will not save anything, and warns them', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    try {
+      const { wrapper, router } = await visit('/j/BCDFG')
+      await wrapper.get('input').setValue('Bo')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(router.currentRoute.value.fullPath).toBe('/g/BCDFG')
+      expect(joinGame).toHaveBeenCalledTimes(1)
+      expect(wrapper.get('[role="alert"]').text()).toContain('Keep this tab open')
+    } finally {
+      vi.restoreAllMocks()
+      removeSession('BCDFG')
+    }
   })
 
   it('asks for a name before joining', async () => {

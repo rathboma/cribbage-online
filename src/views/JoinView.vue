@@ -12,14 +12,16 @@ import {
 import { getApi, setStartCursor } from '@/api'
 import { ApiError } from '@/api/client'
 import { friendlyError } from '@/api/messages'
-import { loadLastName, loadSession, saveLastName, saveSession } from '@/api/session'
+import { loadLastName, loadSession, saveLastName, saveSession, SEAT_NOT_SAVED } from '@/api/session'
 import AppPage from '@/components/AppPage.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import TextInput from '@/components/base/TextInput.vue'
+import { useToasts } from '@/stores/toasts'
 
 /** `code` is set when opened from a share link (/j/CODE): then only the name is asked for. */
 const props = defineProps<{ code?: string }>()
 const router = useRouter()
+const toasts = useToasts()
 
 /** `kind` names the problem for tests; players read the title and message. */
 type Problem = {
@@ -42,9 +44,13 @@ const joinError = ref<string | null>(null)
 const codeField = ref<InstanceType<typeof TextInput> | null>(null)
 const nameField = ref<InstanceType<typeof TextInput> | null>(null)
 
-/** Upper-cases and keeps only letters a code can contain, so wrong ones never appear. */
+/**
+ * Upper-cases and keeps only letters a code can contain, so wrong ones never appear. A pasted
+ * share link (or the whole invitation it came in) gives the code after its /j/.
+ */
 function codeFilter(value: string): string {
-  return value
+  const linked = /\/j\/([a-z]{5})(?![a-z])/i.exec(value)?.[1]
+  return (linked ?? value)
     .toUpperCase()
     .split('')
     .filter((c) => GAME_CODE_ALPHABET.includes(c))
@@ -58,8 +64,15 @@ const nameError = computed(() =>
     : null,
 )
 
+/** Counts lookups, so the answer to an earlier code can't land after a newer one was entered. */
+let lookups = 0
+/** The code being looked up or already answered; typing it again is not a new lookup. */
+let lookedUp: string | null = null
+
 /** Looks a code up; a game this browser already plays in opens straight away. */
 async function check(code: string) {
+  const mine = ++lookups
+  lookedUp = code
   problem.value = null
   if (loadSession(code)) {
     await router.replace({ name: 'game', params: { code } })
@@ -68,6 +81,7 @@ async function check(code: string) {
   checking.value = true
   try {
     const found = await getApi().lookupGame(code)
+    if (mine !== lookups) return
     if (found.joinable) {
       game.value = found
       step.value = 'name'
@@ -87,9 +101,9 @@ async function check(code: string) {
       }
     }
   } catch (err) {
-    problem.value = problemFor(err, () => check(code))
+    if (mine === lookups) problem.value = problemFor(err, () => check(code))
   } finally {
-    checking.value = false
+    if (mine === lookups) checking.value = false
   }
 }
 
@@ -117,9 +131,16 @@ function submitCode() {
   if (code) void check(code)
 }
 
-// Submit as soon as the fifth letter is typed or pasted.
+// Submit as soon as the fifth letter is typed or pasted. Editing the code while it is being
+// looked up drops that lookup: its answer would be for a code no longer in the field.
 watch(codeText, (text) => {
-  if (text.length === GAME_CODE_LENGTH && !checking.value) submitCode()
+  if (text.length !== GAME_CODE_LENGTH) {
+    lookups++
+    lookedUp = null
+    checking.value = false
+  } else if (text !== lookedUp) {
+    submitCode()
+  }
 })
 
 async function join() {
@@ -131,11 +152,19 @@ async function join() {
   joining.value = true
   try {
     const res = await getApi().joinGame(code, { name: playerName })
-    saveSession(code, { playerToken: res.playerToken, seat: res.seat, name: playerName })
+    const session = { playerToken: res.playerToken, seat: res.seat, name: playerName }
+    if (!saveSession(code, session)) {
+      toasts.push(SEAT_NOT_SAVED, { kind: 'error', timeoutMs: 15_000 })
+    }
     saveLastName(playerName)
     setStartCursor(code, res.cursor)
     await router.push({ name: 'game', params: { code } })
   } catch (err) {
+    // "Full" because this browser took the seat itself (in another tab): open the game.
+    if (err instanceof ApiError && err.code === 'game_full' && loadSession(code)) {
+      await router.replace({ name: 'game', params: { code } })
+      return
+    }
     const p = problemFor(err, join)
     if (p.retry) joinError.value = p.message
     else problem.value = p
@@ -149,6 +178,7 @@ async function startOver() {
   problem.value = null
   game.value = null
   step.value = 'code'
+  lookedUp = null
   codeText.value = ''
   if (props.code) {
     await router.push({ name: 'join' })
@@ -201,7 +231,8 @@ watch(
       </div>
     </div>
 
-    <template v-else-if="step === 'code'">
+    <!-- A share link never shows the code form: it is checked, then asks for a name. -->
+    <template v-else-if="step === 'code' && code === undefined">
       <h1>Join a game</h1>
       <form class="join__form" novalidate @submit.prevent="submitCode">
         <TextInput

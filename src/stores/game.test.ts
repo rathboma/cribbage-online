@@ -249,6 +249,99 @@ describe('useGameStore', () => {
   })
 })
 
+describe('a presenter that takes its time', () => {
+  it("reports the status of the step on screen, not the server's latest", async () => {
+    const { store } = connect()
+    transport.emit(step(1))
+    expect(store.presentedStatus).toBe('active')
+
+    let finish = () => {}
+    store.setPresenter(() => new Promise<void>((resolve) => (finish = resolve)))
+    transport.emit({ ...step(2), status: 'finished' })
+    // The server says finished; the winning move is still being shown.
+    expect(store.status).toBe('finished')
+    expect(store.presentedStatus).toBe('active')
+    expect(store.presentedView?.hand).toBe(1)
+    finish()
+    await vi.waitFor(() => expect(store.presentedStatus).toBe('finished'))
+    expect(store.presentedView?.hand).toBe(2)
+  })
+
+  it('is busy until the screen has caught up, so no move starts from a stale view', async () => {
+    const { store } = connect()
+    transport.emit(step(1))
+    expect(store.busy).toBe(false)
+
+    let finish = () => {}
+    store.setPresenter(() => new Promise<void>((resolve) => (finish = resolve)))
+    transport.emit(step(2))
+    expect(store.sending).toBe(false)
+    expect(store.busy).toBe(true)
+    finish()
+    await vi.waitFor(() => expect(store.busy).toBe(false))
+  })
+
+  it('waits for any thenable, not only a real Promise', async () => {
+    const { store } = connect()
+    let finish = () => {}
+    const thenable = { then: (resolve: () => void) => void (finish = resolve) }
+    store.setPresenter(() => thenable as unknown as PromiseLike<void>)
+    transport.emit(step(1))
+    await Promise.resolve() // a thenable's then() is called a tick later
+    expect(store.presentedView).toBeNull()
+    finish()
+    await vi.waitFor(() => expect(store.presentedView?.hand).toBe(1))
+  })
+
+  it('drops a step still being shown when the store connects to another game', async () => {
+    const { store } = connect()
+    const finish: (() => void)[] = []
+    const shown: number[] = []
+    store.setPresenter(
+      (s) =>
+        new Promise<void>((resolve) => {
+          shown.push(s.view?.hand ?? -1)
+          finish.push(resolve)
+        }),
+    )
+    transport.emit(step(7)) // game A, mid-animation
+
+    saveSession('CDFGH', { playerToken: 'tok2', seat: 0, name: 'Bo' })
+    const second = new FakeTransport()
+    store.connect('CDFGH', { api, transport: () => second })
+    second.emit(step(1))
+    expect(shown).toEqual([7, 1])
+
+    // Game A's animation ends now: its view must not appear in game B, and it must not start
+    // a second run through game B's queue.
+    finish[0]!()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.presentedView).toBeNull()
+    second.emit(step(2))
+    expect(shown).toEqual([7, 1])
+
+    finish[1]!()
+    await vi.waitFor(() => expect(store.presentedView?.hand).toBe(1))
+    await vi.waitFor(() => expect(shown).toEqual([7, 1, 2]))
+  })
+
+  it('keeps the game going when a chat or signal listener throws', () => {
+    const { store } = connect()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const heard: number[] = []
+    store.onServerEvent('chat', () => {
+      throw new Error('chat panel bug')
+    })
+    store.onServerEvent('chat', (e) => heard.push(e.id))
+    transport.emit(step(2, [{ id: 5, at: 0, kind: 'chat', payload: {} }]))
+    expect(heard).toEqual([5])
+    expect(store.presentedView?.hand).toBe(2)
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+})
+
 describe('the events of the hand on screen', () => {
   let nextId = 1
   /** One server event carrying the engine events of one move. */

@@ -70,12 +70,17 @@ function fakeApi() {
 
 let hidden = false
 let visibilityListener: (() => void) | null = null
+let onlineListener: (() => void) | null = null
 const env: Partial<TransportEnv> = {
   random: () => 1,
   isHidden: () => hidden,
   onVisibilityChange: (fn) => {
     visibilityListener = fn
     return () => (visibilityListener = null)
+  },
+  onOnline: (fn) => {
+    onlineListener = fn
+    return () => (onlineListener = null)
   },
 }
 
@@ -105,6 +110,7 @@ beforeEach(() => {
   syncTimes = []
   hidden = false
   visibilityListener = null
+  onlineListener = null
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -308,14 +314,107 @@ describe('PollingTransport', () => {
     expect(await gapBeforeNextSync(fake.sync)).toBe(500)
   })
 
-  it.each([401, 404, 410])('stops for good on %i and reports it', async (status) => {
+  it.each([
+    [401, 'unauthorized'],
+    [404, 'game_not_found'],
+  ] as const)('stops for good when the server says %i %s', async (status, code) => {
     const t = setup()
-    t.answers.push(new ApiError(status, 'game_not_found', 'gone'))
+    t.answers.push(new ApiError(status, code, 'gone'))
     t.transport.start(0)
     await vi.advanceTimersByTimeAsync(0)
-    expect(t.fatal.map((e) => e.status)).toEqual([status])
+    expect(t.fatal.map((e) => e.code)).toEqual([code])
     await vi.advanceTimersByTimeAsync(10 * MIN)
     expect(t.sync).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    [404, 'not_found'], // no such API route, e.g. during a bad deploy
+    [404, 'bad_request'], // a 404 page that isn't the API's
+    [410, 'game_ended'],
+  ] as const)('keeps trying after %i %s: the game may still be there', async (status, code) => {
+    const t = setup()
+    t.answers.push(new ApiError(status, code, 'nope'))
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.fatal).toEqual([])
+    expect(t.connection.at(-1)).toBe('reconnecting')
+    expect(await gapBeforeNextSync(t.sync)).toBe(1000)
+    expect(t.connection.at(-1)).toBe('online')
+  })
+
+  it('polls at once when the network comes back', async () => {
+    const t = setup()
+    const offline = () => new ApiError(0, 'network', 'offline')
+    t.answers.push(offline(), offline(), offline(), offline(), offline())
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(20_000) // five failures: the next try is 16s away
+    expect(t.connection.at(-1)).toBe('offline')
+    const calls = t.sync.mock.calls.length
+    onlineListener?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sync.mock.calls.length).toBe(calls + 1)
+    expect(t.connection.at(-1)).toBe('online')
+  })
+
+  it('polls a hidden tab no faster than an idle visible one', async () => {
+    const t = setup()
+    t.transport.start(0)
+    hidden = true
+    await vi.advanceTimersByTimeAsync(11 * MIN)
+    await gapBeforeNextSync(t.sync)
+    expect(await gapBeforeNextSync(t.sync)).toBe(30_000)
+  })
+
+  it('goes back to active polling when a finished game becomes active again', async () => {
+    const t = setup()
+    t.answers.push(response({ status: 'finished', view: view({ phase: 'game_over' }) }))
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await gapBeforeNextSync(t.sync)).toBe(POLL.ended)
+    // A rematch: the same game is being played again.
+    t.answers.push(response({ status: 'active', version: 2, view: view() }))
+    await gapBeforeNextSync(t.sync)
+    expect(await gapBeforeNextSync(t.sync)).toBe(POLL.waiting)
+    await vi.advanceTimersByTimeAsync(POLL.endedFor)
+    expect(t.connection.at(-1)).toBe('online')
+  })
+
+  it('never has more than one poll waiting, however slow the server', async () => {
+    const t = setup()
+    // Every answer takes 1.5 seconds.
+    t.sync.mockImplementation(async () => {
+      syncTimes.push(Date.now())
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      return response()
+    })
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(100)
+    // While the first poll is out, more are asked for: a boost toggled on, taps, a move.
+    t.transport.setBoost(true)
+    t.transport.setBoost(false)
+    t.transport.nudge()
+    await vi.advanceTimersByTimeAsync(60_000)
+    // One poll at a time: an answer (1.5s), the waiting interval (1s), the next poll.
+    const gaps = syncTimes.slice(2).map((time, i) => time - (syncTimes[i + 1] as number))
+    expect(new Set(gaps)).toEqual(new Set([1500 + POLL.waiting]))
+  })
+
+  it('keeps delivering when a listener throws, and does not call it a network failure', async () => {
+    const t = setup()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const seen: number[] = []
+    t.transport.onStep(() => {
+      throw new Error('a chat panel bug')
+    })
+    t.transport.onStep((s) => seen.push(s.events.length))
+    t.answers.push(response({ cursor: 3, events: [chat(1), chat(2), chat(3)] }))
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.steps.at(-1)?.events.map((e) => e.id)).toEqual([1, 2, 3])
+    expect(seen).toEqual([3])
+    expect(t.connection.at(-1)).toBe('online')
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
   })
 
   it('sends moves with the hand, cursor and version, and delivers the response', async () => {
@@ -366,6 +465,21 @@ describe('PollingTransport', () => {
     expect(t.fatal).toEqual([])
   })
 
+  it('treats a move refused because the game is over as a refused move, not a lost seat', async () => {
+    const t = setup()
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    t.act.mockRejectedValueOnce(new ApiError(410, 'game_ended', 'over'))
+    await expect(t.transport.send({ type: 'ready' }, 1)).rejects.toMatchObject({
+      code: 'game_ended',
+    })
+    expect(t.fatal).toEqual([])
+    // It resyncs, which is how the screen learns the game is over.
+    const calls = t.sync.mock.calls.length
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sync.mock.calls.length).toBe(calls + 1)
+  })
+
   it('stops when a move gets a terminal answer', async () => {
     const t = setup()
     t.transport.start(0)
@@ -383,5 +497,28 @@ describe('PollingTransport', () => {
     await vi.advanceTimersByTimeAsync(10 * MIN)
     expect(t.sync).toHaveBeenCalledTimes(1)
     expect(visibilityListener).toBeNull()
+    expect(onlineListener).toBeNull()
+  })
+
+  it('delivers nothing and sends nothing more once stopped, even with a request out', async () => {
+    const t = setup()
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    const steps = t.steps.length
+    const connection = t.connection.length
+    // A poll is in flight, and a move is queued behind it, when the player leaves the game.
+    let release: (r: SyncResponse) => void = () => {}
+    t.sync.mockImplementationOnce(() => new Promise<SyncResponse>((r) => (release = r)))
+    await vi.advanceTimersByTimeAsync(POLL.waiting)
+    const move = t.transport.send({ type: 'go' }, 1).catch((e: unknown) => e)
+    t.transport.stop()
+    release(response({ cursor: 9, version: 9, view: view(), events: [chat(9)] }))
+    expect(await move).toBeInstanceOf(ApiError)
+    await vi.advanceTimersByTimeAsync(10 * MIN)
+
+    expect(t.act).not.toHaveBeenCalled()
+    expect(t.steps.length).toBe(steps)
+    expect(t.connection.length).toBe(connection)
+    expect(t.fatal).toEqual([])
   })
 })

@@ -39,15 +39,25 @@ describe('sessions', () => {
     expect(loadLastName()).toBe('Ada')
   })
 
-  it('keeps working when storage throws', () => {
+  it('says the session was saved when storage works', () => {
+    expect(saveSession('BCDFG', { playerToken: 't', seat: 0, name: 'A' })).toBe(true)
+  })
+
+  it('keeps the seat for this tab when storage is blocked or full, and says so', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError')
     })
-    expect(() => saveSession('BCDFG', { playerToken: 't', seat: 0, name: 'A' })).not.toThrow()
-    expect(loadSession('BCDFG')).toBeNull()
+    const session = { playerToken: 't', seat: 0 as const, name: 'A' }
+    expect(saveSession('BCDFG', session)).toBe(false)
+    // The token came once and can't be fetched again: it must not be lost.
+    expect(loadSession('BCDFG')).toEqual(session)
+    expect(loadSession('ZZZZZ')).toBeNull()
     expect(loadLastName()).toBe('')
+
+    removeSession('BCDFG')
+    expect(loadSession('BCDFG')).toBeNull()
   })
 })

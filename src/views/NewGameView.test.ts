@@ -4,8 +4,9 @@ import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { takeStartCursor, useApiClient } from '@/api'
 import { ApiError, type ApiClient } from '@/api/client'
-import { loadLastName, loadSession, saveLastName } from '@/api/session'
+import { loadLastName, loadSession, removeSession, saveLastName } from '@/api/session'
 import { routes } from '@/router/routes'
+import { useToasts } from '@/stores/toasts'
 import NewGameView from './NewGameView.vue'
 
 let restore: () => void
@@ -14,8 +15,9 @@ let createGame: ReturnType<typeof vi.fn>
 async function mountForm() {
   const router = createRouter({ history: createMemoryHistory(), routes })
   await router.push('/new')
-  const wrapper = mount(NewGameView, { global: { plugins: [router, createPinia()] } })
-  return { wrapper, router }
+  const pinia = createPinia()
+  const wrapper = mount(NewGameView, { global: { plugins: [router, pinia] } })
+  return { wrapper, router, pinia }
 }
 
 beforeEach(() => {
@@ -57,6 +59,27 @@ describe('start game form', () => {
     expect(loadLastName()).toBe('Ada')
     expect(takeStartCursor('BCDFG')).toBe(0)
     await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/g/BCDFG'))
+  })
+
+  it('still opens the game when the browser will not save anything, and warns the host', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    try {
+      const { wrapper, router, pinia } = await mountForm()
+      await wrapper.get('input').setValue('Ada')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      // The token came once: without it the host would be asked to join their own game.
+      expect(loadSession('BCDFG')).toEqual({ playerToken: 'tok', seat: 0, name: 'Ada' })
+      await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/g/BCDFG'))
+      expect(useToasts(pinia).toasts).toMatchObject([
+        { kind: 'error', message: expect.stringContaining('Keep this tab open') },
+      ])
+    } finally {
+      vi.restoreAllMocks()
+      removeSession('BCDFG')
+    }
   })
 
   it('cannot be submitted twice while starting', async () => {

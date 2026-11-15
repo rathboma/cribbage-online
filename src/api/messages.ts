@@ -17,7 +17,7 @@ export function friendlyError(err: unknown): string {
   if (err instanceof ApiError) {
     const message = MESSAGES[err.code]
     if (message) return message
-    if (err.status === 0 || err.status >= 500) {
+    if (err.code === 'internal' || err.status === 0 || err.status >= 500) {
       return 'Something went wrong on our side. Please try again in a moment.'
     }
     return err.message

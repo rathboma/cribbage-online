@@ -78,6 +78,8 @@ export interface TransportEnv {
   random(): number
   isHidden(): boolean
   onVisibilityChange(fn: () => void): () => void
+  /** Calls `fn` when the browser says the network is back. Returns a function to stop. */
+  onOnline(fn: () => void): () => void
 }
 
 export function browserEnv(): TransportEnv {
@@ -91,6 +93,11 @@ export function browserEnv(): TransportEnv {
       if (typeof document === 'undefined') return () => {}
       document.addEventListener('visibilitychange', fn)
       return () => document.removeEventListener('visibilitychange', fn)
+    },
+    onOnline(fn) {
+      if (typeof window === 'undefined') return () => {}
+      window.addEventListener('online', fn)
+      return () => window.removeEventListener('online', fn)
     },
   }
 }
@@ -125,7 +132,9 @@ export class PollingTransport implements GameTransport {
   private endedAt: number | null = null
   /** Requests run one at a time, in order: polls and moves never overlap. */
   private queue: Promise<unknown> = Promise.resolve()
-  private unwatchVisibility: () => void = () => {}
+  /** True from the moment a poll is queued until it has finished: polls never pile up. */
+  private pollQueued = false
+  private unwatch: (() => void)[] = []
   private readonly stepListeners = new Set<(step: Step) => void>()
   private readonly connectionListeners = new Set<(state: ConnectionState) => void>()
   private readonly fatalListeners = new Set<(error: ApiError) => void>()
@@ -145,9 +154,14 @@ export class PollingTransport implements GameTransport {
     this.cursor = cursor
     this.delivered = cursor ?? 0
     this.lastChange = this.lastActivity = this.env.now()
-    this.unwatchVisibility = this.env.onVisibilityChange(() => {
-      if (!this.env.isHidden()) this.nudge()
-    })
+    this.unwatchAll()
+    this.unwatch = [
+      // Looking at the tab again, or the network coming back: poll now, not at the slow rate.
+      this.env.onVisibilityChange(() => {
+        if (!this.env.isHidden()) this.nudge()
+      }),
+      this.env.onOnline(() => this.nudge()),
+    ]
     this.setConnection('connecting')
     this.schedule(0)
   }
@@ -155,22 +169,30 @@ export class PollingTransport implements GameTransport {
   stop(): void {
     this.stopped = true
     this.clearTimer()
-    this.unwatchVisibility()
+    this.unwatchAll()
+  }
+
+  private unwatchAll(): void {
+    for (const off of this.unwatch) off()
+    this.unwatch = []
   }
 
   send(action: ClientAction, hand: number): Promise<void> {
     if (this.paused) this.resume()
     else this.nudge()
     return this.exclusive(async () => {
+      if (this.stopped) throw new ApiError(0, 'network', 'Not connected.')
       const res = await this.api.act(this.code, this.token, {
         action,
         hand,
         cursor: this.cursor ?? 0,
         v: this.version ?? 0,
       })
+      if (this.stopped) return // left the game meanwhile: nobody is listening
       this.absorb(res)
       this.schedule(0) // confirm straight away
     }).catch((err: unknown) => {
+      if (this.stopped) throw err
       if (err instanceof ApiError && err.isTerminal) this.fail(err)
       else this.schedule(0) // resync whatever happened
       throw err
@@ -221,32 +243,43 @@ export class PollingTransport implements GameTransport {
     const now = this.env.now()
     if (this.boost) return POLL.boost
     if (this.endedAt !== null) return now - this.endedAt >= POLL.endedFor ? null : POLL.ended
-    if (this.env.isHidden()) return POLL.hidden
     const idle = now - Math.max(this.lastChange, this.lastActivity)
     const step = POLL.idle.find((s) => idle >= s.after)
+    // A hidden tab polls slowly, and never faster than an idle visible one would.
+    if (this.env.isHidden()) return Math.max(POLL.hidden, step?.every ?? 0)
     if (step) return step.every
     return isMyMove(this.view) ? POLL.myMove : POLL.waiting
   }
 
   private async poll(): Promise<void> {
-    if (this.stopped || this.paused) return
-    await this.exclusive(async () => {
-      const res = await this.api.sync(this.code, this.token, {
-        cursor: this.cursor,
-        v: this.version,
+    // One poll at a time, queued or running. Without this, a poll asked for while another
+    // waits behind a slow request would leave two chains of polls running back to back.
+    if (this.stopped || this.paused || this.pollQueued) return
+    this.pollQueued = true
+    try {
+      await this.exclusive(async () => {
+        if (this.stopped || this.paused) return
+        const res = await this.api.sync(this.code, this.token, {
+          cursor: this.cursor,
+          v: this.version,
+        })
+        if (this.stopped) return // stopped while the request was out: drop the answer
+        this.absorb(res)
+        this.failures = 0
+        this.setConnection('online')
+        this.schedule(res.more ? 0 : this.nextDelay())
       })
-      this.absorb(res)
-      this.failures = 0
-      this.setConnection('online')
-      this.schedule(res.more ? 0 : this.nextDelay())
-    }).catch((err: unknown) => {
+    } catch (err) {
+      if (this.stopped) return
       const error = err instanceof ApiError ? err : new ApiError(0, 'network', String(err))
       if (error.isTerminal) return this.fail(error)
       this.failures++
       this.setConnection(this.failures >= POLL.offlineAfter ? 'offline' : 'reconnecting')
       const backoff = Math.min(POLL.errorMax, POLL.errorBase * 2 ** (this.failures - 1))
       this.schedule(backoff * (0.5 + this.env.random() * 0.5))
-    })
+    } finally {
+      this.pollQueued = false
+    }
   }
 
   /** Folds a response into the transport's state and hands what is new to the listeners. */
@@ -265,7 +298,9 @@ export class PollingTransport implements GameTransport {
     }
     if (events.length) this.lastChange = this.env.now()
     this.status = res.status
-    if (ENDED.includes(res.status) && this.endedAt === null) this.endedAt = this.env.now()
+    if (!ENDED.includes(res.status))
+      this.endedAt = null // e.g. a rematch: active again
+    else if (this.endedAt === null) this.endedAt = this.env.now()
     const step: Step = {
       events,
       ...(view ? { view, version: res.version } : {}),
@@ -273,7 +308,15 @@ export class PollingTransport implements GameTransport {
       players: res.players,
       serverTime: res.serverTime,
     }
-    for (const listener of this.stepListeners) listener(step)
+    // The cursor has moved on, so this step will not come again: one listener failing must
+    // not keep it from the others, or be mistaken for a failed request.
+    for (const listener of this.stepListeners) {
+      try {
+        listener(step)
+      } catch (err) {
+        console.error('A step listener failed', err)
+      }
+    }
   }
 
   private schedule(delay: number | null): void {

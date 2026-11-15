@@ -30,9 +30,13 @@ import {
 } from '@/api/transport'
 
 /** Shows a step. May return a promise (e.g. while animating); the view is committed after it. */
-export type Presenter = (step: Step) => void | Promise<void>
+export type Presenter = (step: Step) => void | PromiseLike<void>
 
 const showAtOnce: Presenter = () => {}
+
+function isThenable(value: unknown): value is PromiseLike<void> {
+  return typeof (value as PromiseLike<void> | undefined)?.then === 'function'
+}
 
 /**
  * Keeps only the events of the latest hand: from its `hand_dealt` on (and the cut for first
@@ -67,17 +71,30 @@ export const useGameStore = defineStore('game', () => {
    * deal, and is empty after a reload (a reload snaps to the present without replaying events).
    */
   const handEvents = shallowRef<GameEvent[]>([])
+  /**
+   * The game's status as of the step on screen. `status` is the server's latest word and can
+   * run ahead of the screen while a step is still being shown; the game screen reads this one.
+   */
+  const presentedStatus = ref<GameStatus | null>(null)
   const connection = ref<ConnectionState>('connecting')
   /** Set when the server says this game or seat is gone; syncing has stopped. */
   const fatalError = shallowRef<ApiError | null>(null)
   /** True while a move is on its way to the server. */
   const sending = ref(false)
+  /** True while steps have arrived that the presenter has not finished showing. */
+  const presenting = ref(false)
+  /**
+   * No new move may start: one is on its way, or the screen has not caught up with the
+   * server yet (so what the player would be acting on is already out of date).
+   */
+  const busy = computed(() => sending.value || presenting.value)
 
   let transport: GameTransport | null = null
   let unsubscribe: (() => void)[] = []
   let presenter: Presenter = showAtOnce
   const pending: Step[] = []
-  let presenting = false
+  /** Goes up at every (re)connect, so a step still being shown for an old game is dropped. */
+  let generation = 0
   const listeners = new Map<OtherKind, Set<EventListener>>()
 
   const isMyTurn = computed(() => isMyMove(presentedView.value ?? undefined))
@@ -149,42 +166,55 @@ export const useGameStore = defineStore('game', () => {
     players.value = []
     view.value = null
     presentedView.value = null
+    presentedStatus.value = null
     handEvents.value = []
     connection.value = 'connecting'
     fatalError.value = null
     sending.value = false
     pending.length = 0
-    presenting = false
+    presenting.value = false
+    generation++
   }
 
   function receive(step: Step) {
     status.value = step.status
     players.value = step.players
     if (step.view) view.value = step.view
-    // Chat, signals and notices don't wait for animations.
+    // Chat, signals and notices don't wait for animations. A listener that fails must not
+    // take the step (or the other listeners) down with it.
     for (const event of step.events) {
-      if (event.kind !== 'game') for (const fn of listeners.get(event.kind) ?? []) fn(event)
+      if (event.kind === 'game') continue
+      for (const fn of listeners.get(event.kind) ?? []) {
+        try {
+          fn(event)
+        } catch (err) {
+          console.error(`A ${event.kind} listener failed`, err)
+        }
+      }
     }
     pending.push(step)
-    if (!presenting) present()
+    if (!presenting.value) present()
   }
 
   /** Hands queued steps to the presenter strictly in order, committing each view after it. */
   function present() {
-    presenting = true
+    const mine = generation
+    presenting.value = true
     while (pending.length) {
       const step = pending.shift() as Step
-      let result: void | Promise<void>
+      let result: void | PromiseLike<void>
       try {
         result = presenter(step)
       } catch (err) {
         console.error('Presenter failed', err)
         result = undefined
       }
-      if (result instanceof Promise) {
-        result
-          .catch((err) => console.error('Presenter failed', err))
+      if (isThenable(result)) {
+        Promise.resolve(result)
+          .catch((err: unknown) => console.error('Presenter failed', err))
           .then(() => {
+            // Reconnected (or left) while this step was being shown: it belongs to the past.
+            if (mine !== generation) return
             commit(step)
             present()
           })
@@ -192,10 +222,11 @@ export const useGameStore = defineStore('game', () => {
       }
       commit(step)
     }
-    presenting = false
+    presenting.value = false
   }
 
   function commit(step: Step) {
+    presentedStatus.value = step.status
     const fresh = step.events.flatMap((e) => (e.kind === 'game' ? e.payload.events : []))
     if (fresh.length) handEvents.value = eventsOfCurrentHand([...handEvents.value, ...fresh])
     if (step.view) presentedView.value = step.view
@@ -235,10 +266,12 @@ export const useGameStore = defineStore('game', () => {
     players,
     view,
     presentedView,
+    presentedStatus,
     handEvents,
     connection,
     fatalError,
     sending,
+    busy,
     isMyTurn,
     connect,
     disconnect,

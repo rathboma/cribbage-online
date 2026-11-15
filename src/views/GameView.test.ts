@@ -89,7 +89,30 @@ describe('game screen', () => {
     sync.mockRejectedValue(new ApiError(404, 'game_not_found', 'gone'))
     const { wrapper } = await open('/g/BCDFG')
     await vi.advanceTimersByTimeAsync(0)
-    expect(wrapper.get('main [role="alert"]').text()).toContain("There's no game with that code")
+    expect(wrapper.get('main [role="alert"]').text()).toContain('This game is no longer there')
     expect(loadSession('BCDFG')).toBeNull()
+  })
+
+  it('keeps the seat when a request merely fails with a 404 that is not about the game', async () => {
+    sync.mockRejectedValue(new ApiError(404, 'not_found', 'No API route'))
+    const { wrapper } = await open('/g/BCDFG')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.find('main [role="alert"]').exists()).toBe(false)
+    expect(loadSession('BCDFG')).not.toBeNull()
+  })
+
+  it('picks polling up again when the host touches the waiting room after a quiet spell', async () => {
+    setStartCursor('BCDFG', 0)
+    await open('/g/BCDFG')
+    await vi.advanceTimersByTimeAsync(11 * 60_000) // nothing happens: polling slows to 30s
+    const calls = sync.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(sync.mock.calls.length).toBe(calls)
+    window.dispatchEvent(new Event('pointerdown'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sync.mock.calls.length).toBe(calls + 1)
+    // ...and stays at the active rate.
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sync.mock.calls.length).toBe(calls + 2)
   })
 })

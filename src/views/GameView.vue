@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { takeStartCursor } from '@/api'
 import { friendlyError } from '@/api/messages'
 import AppPage from '@/components/AppPage.vue'
@@ -18,7 +18,27 @@ watch(
 )
 onBeforeUnmount(() => game.disconnect())
 
-const fatalMessage = computed(() => (game.fatalError ? friendlyError(game.fatalError) : null))
+// A tap or a key press anywhere on this screen - the waiting room as much as the table - means
+// the player is here: if polling had slowed down after a quiet spell, it picks up again.
+const onActivity = () => game.nudge()
+onMounted(() => {
+  window.addEventListener('pointerdown', onActivity, { passive: true })
+  window.addEventListener('keydown', onActivity)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onActivity)
+  window.removeEventListener('keydown', onActivity)
+})
+
+const fatalMessage = computed(() => {
+  const error = game.fatalError
+  if (!error) return null
+  // The join screen's advice ("check the code") means nothing here: there is no code to check.
+  if (error.code === 'game_not_found') {
+    return 'This game is no longer there. Games that nobody has played for a while are removed.'
+  }
+  return friendlyError(error)
+})
 </script>
 
 <template>

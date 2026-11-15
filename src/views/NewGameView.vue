@@ -4,14 +4,16 @@ import { useRouter } from 'vue-router'
 import { parsePlayerName, PLAYER_NAME_MAX_LENGTH } from '@shared/protocol'
 import { getApi, setStartCursor } from '@/api'
 import { friendlyError } from '@/api/messages'
-import { loadLastName, saveLastName, saveSession } from '@/api/session'
+import { loadLastName, saveLastName, saveSession, SEAT_NOT_SAVED } from '@/api/session'
 import AppPage from '@/components/AppPage.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import TextInput from '@/components/base/TextInput.vue'
 import ToggleSwitch from '@/components/base/ToggleSwitch.vue'
+import { useToasts } from '@/stores/toasts'
 
 const router = useRouter()
+const toasts = useToasts()
 
 const chatOn = ref(true)
 const videoOn = ref(false)
@@ -38,7 +40,10 @@ async function start() {
       chatOn: chatOn.value,
       videoOn: videoOn.value,
     })
-    saveSession(res.code, { playerToken: res.playerToken, seat: res.seat, name: playerName })
+    const session = { playerToken: res.playerToken, seat: res.seat, name: playerName }
+    if (!saveSession(res.code, session)) {
+      toasts.push(SEAT_NOT_SAVED, { kind: 'error', timeoutMs: 15_000 })
+    }
     saveLastName(playerName)
     setStartCursor(res.code, res.cursor)
     await router.push({ name: 'game', params: { code: res.code } })

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError, createApiClient } from './client'
+import { ApiError, createApiClient, REQUEST_TIMEOUT_MS } from './client'
+import { friendlyError } from './messages'
 
 function fakeFetch(status: number, body: unknown, raw?: string) {
   return vi.fn(
@@ -82,12 +83,31 @@ describe('createApiClient', () => {
     expect((err as ApiError).isTerminal).toBe(false)
   })
 
-  it.each([401, 404, 410])('marks %i as terminal', async (status) => {
-    const fetch = fakeFetch(status, { error: { code: 'unauthorized', message: 'x' } })
+  it.each([
+    [401, 'unauthorized'],
+    [404, 'game_not_found'],
+  ] as const)('marks %i %s as terminal', async (status, code) => {
+    const fetch = fakeFetch(status, { error: { code, message: 'x' } })
     const err = (await createApiClient({ fetch })
       .sync('B', 't', {})
       .catch((e) => e)) as ApiError
     expect(err.isTerminal).toBe(true)
+  })
+
+  it.each([
+    // A move refused because the game is over is a refused move, not a lost seat.
+    [410, { error: { code: 'game_ended', message: 'x' } }],
+    // No such API route (a deploy gone wrong), or a proxy's own 404 page.
+    [404, { error: { code: 'not_found', message: 'x' } }],
+    [404, null],
+    [401, null],
+  ] as const)('does not mark %i %j as terminal', async (status, body) => {
+    const fetch = fakeFetch(status, body, body === null ? '<html>nope</html>' : undefined)
+    const err = (await createApiClient({ fetch })
+      .sync('B', 't', {})
+      .catch((e) => e)) as ApiError
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.isTerminal).toBe(false)
   })
 
   it('copes with a non-JSON error page', async () => {
@@ -96,6 +116,52 @@ describe('createApiClient', () => {
       .lookupGame('B')
       .catch((e) => e)) as ApiError
     expect(err).toMatchObject({ status: 502, code: 'internal' })
+  })
+
+  it('reports an answer it cannot read as the server going wrong', async () => {
+    const fetch = fakeFetch(200, null, '<html>Welcome to nginx</html>')
+    const err = (await createApiClient({ fetch })
+      .lookupGame('B')
+      .catch((e) => e)) as ApiError
+    expect(err).toMatchObject({ status: 200, code: 'internal' })
+    expect(friendlyError(err)).toMatch(/went wrong on our side/)
+  })
+
+  it('gives up on a request that never answers', async () => {
+    vi.useFakeTimers()
+    try {
+      // Like the real fetch: pending until the signal aborts it.
+      const fetch = vi.fn(
+        (_input: unknown, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('', 'AbortError')),
+            )
+          }),
+      )
+      const pending = createApiClient({ fetch: fetch as unknown as typeof globalThis.fetch })
+        .sync('B', 't', {})
+        .catch((e) => e)
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1)
+      expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const err = (await pending) as ApiError
+      expect(err).toMatchObject({ status: 0, code: 'network' })
+      expect(err.isTerminal).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not time out an answer that arrived', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetch = fakeFetch(200, { ok: true })
+      await createApiClient({ fetch }).lookupGame('B')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports a network failure as code network, status 0', async () => {
