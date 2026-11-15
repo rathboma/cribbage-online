@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   cardId,
+  cardIds,
   cardValue,
   compareCards,
+  compareRanks,
   fullDeck,
   isCardId,
   parseCard,
+  parseCards,
   sortCards,
   type Card,
 } from './cards'
@@ -76,8 +79,14 @@ describe('sorting', () => {
     expect(cards.map(cardId)).toEqual(['KS', 'AH'])
   })
 
-  it('compareCards is zero only for the same card', () => {
+  it('compareCards breaks rank ties by suit; compareRanks does not', () => {
     expect(compareCards(parseCard('5H'), parseCard('5H'))).toBe(0)
     expect(compareCards(parseCard('5H'), parseCard('5S'))).toBeLessThan(0)
+    expect(compareRanks(parseCard('5H'), parseCard('5S'))).toBe(0)
+    expect(compareRanks(parseCard('AS'), parseCard('2C'))).toBeLessThan(0)
+  })
+
+  it('converts lists of cards to ids and back', () => {
+    expect(cardIds(parseCards(['AS', 'TD']))).toEqual(['AS', 'TD'])
   })
 })

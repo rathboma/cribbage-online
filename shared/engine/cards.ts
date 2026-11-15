@@ -1,6 +1,8 @@
 /**
  * Cards and the deck. A card's compact string form (`CardId`) is used everywhere in JSON,
- * game state and the protocol: rank character then suit character, e.g. "5H", "TD", "KS".
+ * game state, events and the protocol: rank character then suit character, e.g. "5H", "TD",
+ * "KS". `Card` objects are for computation inside functions only; never store or send them,
+ * because the leak tests look for hidden cards by their `CardId`.
  */
 
 export type Suit = 'C' | 'D' | 'H' | 'S'
@@ -51,7 +53,15 @@ export function fullDeck(): Card[] {
   return SUITS.flatMap((suit) => RANKS.map((rank) => ({ rank, suit })))
 }
 
-/** Orders by rank (ace low), then by suit. */
+/**
+ * Orders by rank (ace low). Suits never decide anything in the rules except flushes and nobs,
+ * so use this wherever only rank matters, e.g. the cut for first deal.
+ */
+export function compareRanks(a: Card, b: Card): number {
+  return a.rank - b.rank
+}
+
+/** Orders by rank (ace low), then by suit. The suit order is for stable display only. */
 export function compareCards(a: Card, b: Card): number {
   return a.rank - b.rank || SUITS.indexOf(a.suit) - SUITS.indexOf(b.suit)
 }
@@ -59,6 +69,14 @@ export function compareCards(a: Card, b: Card): number {
 /** Returns a new array sorted by rank, then suit. */
 export function sortCards<T extends Card>(cards: readonly T[]): T[] {
   return [...cards].sort(compareCards)
+}
+
+export function cardIds(cards: readonly Card[]): CardId[] {
+  return cards.map(cardId)
+}
+
+export function parseCards(ids: readonly string[]): Card[] {
+  return ids.map(parseCard)
 }
 
 export function sameCard(a: Card, b: Card): boolean {

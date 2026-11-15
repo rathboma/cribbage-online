@@ -39,6 +39,10 @@ export default defineConfigWithVueTs(
         ...['window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'process'].map(
           (name) => ({ name, message: 'shared/ must not depend on a platform API.' }),
         ),
+        {
+          name: 'crypto',
+          message: 'Inject an Rng (cryptoRng() in production) so games stay reproducible.',
+        },
       ],
       'no-restricted-properties': [
         'error',

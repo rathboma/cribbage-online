@@ -38,7 +38,8 @@ export function shuffle<T>(items: readonly T[], rng: Rng): T[] {
 
 /**
  * Deterministic generator for tests and simulations: the same seed always gives the same
- * sequence. Not for production deals. (sfc32, seeded through a string hash.)
+ * sequence. Not for production deals. (sfc32, seeded through a string hash; a number seed is
+ * used as its string form, so `seededRng(42)` and `seededRng('42')` are the same.)
  */
 export function seededRng(seed: number | string): Rng {
   let [a, b, c, d] = hashSeed(String(seed))
@@ -82,7 +83,7 @@ function hashSeed(str: string): [number, number, number, number] {
 
 /** The subset of the Web Crypto API the engine needs (available in browsers and Workers). */
 export interface RandomValuesSource {
-  getRandomValues(array: Uint32Array): Uint32Array
+  getRandomValues(array: Uint32Array<ArrayBuffer>): unknown
 }
 
 /**
@@ -92,7 +93,7 @@ export interface RandomValuesSource {
 export function cryptoRng(source?: RandomValuesSource): Rng {
   const crypto = source ?? (globalThis as unknown as { crypto?: RandomValuesSource }).crypto
   if (!crypto) throw new Error('crypto.getRandomValues is not available')
-  const buffer = new Uint32Array(1)
+  const buffer = new Uint32Array(new ArrayBuffer(4))
   const next32 = () => {
     crypto.getRandomValues(buffer)
     return buffer[0] as number

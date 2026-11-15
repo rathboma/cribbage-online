@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { cardId, fullDeck } from './cards'
 import { cryptoRng, seededRng, shuffle, uniformInt, type RandomValuesSource } from './rng'
 
@@ -69,7 +69,7 @@ describe('seededRng', () => {
 function scriptedSource(values: number[]): RandomValuesSource & { calls: number } {
   const source = {
     calls: 0,
-    getRandomValues(array: Uint32Array) {
+    getRandomValues(array: Uint32Array<ArrayBuffer>) {
       array[0] = values[source.calls++]!
       return array
     },
@@ -95,18 +95,27 @@ describe('uniformInt', () => {
 })
 
 describe('cryptoRng', () => {
-  it('uses the global crypto.getRandomValues by default and stays in range', () => {
-    const rng = cryptoRng()
-    for (let i = 0; i < 1000; i++) {
-      const x = rng.nextInt(52)
-      expect(x >= 0 && x < 52).toBe(true)
+  it('uses the global crypto.getRandomValues by default and covers the whole range', () => {
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues')
+    try {
+      const rng = cryptoRng()
+      const seen = new Set<number>()
+      for (let i = 0; i < 2000; i++) seen.add(rng.nextInt(52))
+      expect(spy).toHaveBeenCalled()
+      expect([...seen].sort((a, b) => a - b)).toEqual([...Array(52).keys()])
+    } finally {
+      spy.mockRestore()
     }
+  })
+
+  it('accepts the platform crypto object as a source', () => {
+    expect(cryptoRng(globalThis.crypto).nextInt(10)).toBeLessThan(10)
   })
 
   it('redraws values that would bias the result', () => {
     // 2^32 mod 52 = 48, so the top 48 values must be rejected.
     const limit = 2 ** 32 - (2 ** 32 % 52)
-    const source = scriptedSource([limit, 2 ** 32 - 1, limit + 47, 103])
+    const source = scriptedSource([limit, limit + 1, 2 ** 32 - 1, 103])
     expect(cryptoRng(source).nextInt(52)).toBe(103 % 52)
     expect(source.calls).toBe(4)
   })
