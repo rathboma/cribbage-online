@@ -5,7 +5,7 @@
 import type { CardId } from './cards'
 import { applyAction, createGame } from './game'
 import { seededRng, type Rng } from './rng'
-import type { Action, GameEvent, GameState } from './state'
+import type { Action, GameEvent, GameState, Pair } from './state'
 import { SEATS, type Seat } from './types'
 import { playerView, type PlayerView } from './view'
 
@@ -61,7 +61,11 @@ export const MAX_SIM_ACTIONS = 5000
  */
 export function simulateGame(
   seed: number | string,
-  options: { onStep?: (step: SimStep) => void } = {},
+  options: {
+    onStep?: (step: SimStep) => void
+    /** Start from these scores instead of 0-0, e.g. to make every kind of win likely. */
+    scores?: Pair<number>
+  } = {},
 ): SimResult {
   const rng = seededRng(seed)
   const events: GameEvent[] = []
@@ -78,7 +82,12 @@ export function simulateGame(
     return result.state
   }
 
-  let state = apply(createGame(), 0, { type: 'start' })
+  const initial = createGame()
+  if (options.scores) {
+    initial.scores = [...options.scores]
+    initial.previousScores = [...options.scores]
+  }
+  let state = apply(initial, 0, { type: 'start' })
   while (state.phase !== 'game_over') {
     if (actionsTaken.length > MAX_SIM_ACTIONS) {
       throw new Error(`seed ${seed}: no result after ${MAX_SIM_ACTIONS} actions`)

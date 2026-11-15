@@ -3,7 +3,7 @@ import { cardIds, fullDeck, type CardId } from './cards'
 import { applyAction, createGame } from './game'
 import { seededRng } from './rng'
 import { MAX_SIM_ACTIONS, randomBot, simulateGame, type SimStep } from './sim'
-import { WINNING_SCORE, type GameEvent, type GameState } from './state'
+import { WINNING_SCORE, type GameEvent, type GameState, type Pair } from './state'
 import { otherSeat, SEATS, type Seat } from './types'
 import { playerView } from './view'
 
@@ -55,6 +55,16 @@ function checkStep({ before, after, events }: SimStep): string[] {
     if (e.type === 'show_scored' && e.total !== sum) problems.push('show total is not its items')
     running[e.seat] = e.to
   }
+  // The rear peg sits where the front peg was before the seat's last (non-zero) award.
+  for (const seat of SEATS) {
+    const awards = events.filter(
+      (e) => (e.type === 'points' || e.type === 'show_scored') && e.seat === seat && e.to > e.from,
+    ) as { from: number }[]
+    const rear = awards.length ? awards.at(-1)!.from : before.previousScores[seat]
+    if (after.previousScores[seat] !== rear) {
+      problems.push(`seat ${seat} rear peg on ${after.previousScores[seat]}, expected ${rear}`)
+    }
+  }
   for (const seat of SEATS) {
     if (after.scores[seat] < before.scores[seat]) problems.push(`seat ${seat} score went down`)
     if (after.scores[seat] !== running[seat]) {
@@ -97,11 +107,12 @@ function goesPerCount(events: GameEvent[]): number {
   return max
 }
 
-function checkGame(seed: number): string[] {
+function checkGame(seed: number, scores?: Pair<number>): string[] {
   const problems: string[] = []
   let result
   try {
     result = simulateGame(seed, {
+      scores,
       onStep: (step) => {
         for (const p of checkStep(step)) problems.push(`hand ${step.after.hand}: ${p}`)
       },
@@ -122,6 +133,12 @@ function checkGame(seed: number): string[] {
     problems.push('game_over is not the single last event')
   }
   if (goesPerCount(events) > 1) problems.push('a count needed more than one go')
+  // Hands are numbered 1, 2, 3, ... and the deal alternates every hand.
+  const deals = events.filter((e) => e.type === 'hand_dealt')
+  deals.forEach((e, i) => {
+    if (e.hand !== i + 1) problems.push(`hand ${i + 1} numbered ${e.hand}`)
+    if (i > 0 && e.dealer === deals[i - 1]!.dealer) problems.push(`hand ${e.hand}: same dealer`)
+  })
   return problems
 }
 
@@ -133,6 +150,33 @@ describe(`${GAMES} seeded bot-vs-bot games`, () => {
       for (const problem of checkGame(seed)) failures.push(`seed ${seed}: ${problem}`)
     }
     expect(failures).toEqual([])
+  }, 120_000)
+
+  it('hold when games start from high scores, so wins come at every stage', () => {
+    const failures: string[] = []
+    const winsBy = new Map<string, number>()
+    const rng = seededRng('high scores')
+    for (let seed = 0; seed < GAMES / 2 && failures.length < 10; seed++) {
+      const scores: Pair<number> = [100 + rng.nextInt(21), 100 + rng.nextInt(21)]
+      for (const problem of checkGame(seed, scores)) {
+        failures.push(`seed ${seed} from ${scores.join('-')}: ${problem}`)
+      }
+      const { events } = simulateGame(seed, { scores })
+      const winning = events.at(-2)!
+      const how =
+        winning.type === 'show_scored'
+          ? `show ${winning.source}`
+          : winning.type === 'points'
+            ? winning.items.map((i) => i.kind).join('+')
+            : winning.type
+      winsBy.set(how, (winsBy.get(how) ?? 0) + 1)
+    }
+    expect(failures).toEqual([])
+    // Wins happened in the play, on the go and last-card points, on heels and in the show.
+    const kinds = [...winsBy.keys()].join(' ')
+    for (const kind of ['show hand', 'show crib', 'go', 'last_card', 'heels', 'fifteen']) {
+      expect(kinds, `no win by ${kind}: ${kinds}`).toContain(kind)
+    }
   }, 120_000)
 })
 
