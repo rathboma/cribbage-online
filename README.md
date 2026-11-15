@@ -30,7 +30,8 @@ yarn dev          # app at http://localhost:5173, API at /api (local D1)
 | `yarn test`             | All unit tests once: shared, client and server (`yarn test:watch` keeps running) |
 | `yarn db:migrate:local` | Apply new files in `migrations/` to the local D1 database                        |
 
-Before pushing, run `yarn lint && yarn typecheck && yarn test && yarn build`.
+Before pushing, run `yarn lint && yarn typecheck && yarn test && yarn build`. CI
+(`.github/workflows/ci.yml`) runs the same checks on every pull request and every push to `main`.
 
 ### Local Cloudflare workflow
 
