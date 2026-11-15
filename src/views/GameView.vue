@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { takeStartCursor } from '@/api'
 import { friendlyError } from '@/api/messages'
 import AppPage from '@/components/AppPage.vue'
@@ -39,22 +39,37 @@ const fatalMessage = computed(() => {
   }
   return friendlyError(error)
 })
+
+/** Which of the four screens this route is showing. */
+const screen = computed(() => {
+  if (fatalMessage.value) return 'problem'
+  if (game.status === 'waiting') return 'waiting'
+  return game.status === null || !game.presentedView ? 'connecting' : 'game'
+})
+
+// The route does not change when the waiting room or the game appears, so nothing else moves
+// focus to the new screen's heading (which is how a screen reader learns the page changed -
+// "Send this code to a friend", then "Game BCDFG" when the opponent arrives).
+watch(screen, async (now) => {
+  if (now === 'connecting') return
+  await nextTick()
+  const heading = document.querySelector<HTMLElement>('main h1')
+  if (!heading) return
+  heading.setAttribute('tabindex', '-1')
+  heading.focus()
+})
 </script>
 
 <template>
-  <AppPage v-if="fatalMessage" back="/" back-label="Home">
+  <AppPage v-if="screen === 'problem'" back="/" back-label="Home">
     <h1>Can't open this game</h1>
     <p role="alert">{{ fatalMessage }}</p>
     <BaseButton to="/" block>Go to the start page</BaseButton>
   </AppPage>
 
   <!-- Until the first view is on screen (and while the host waits for a second player). -->
-  <AppPage
-    v-else-if="game.status === 'waiting' || game.status === null || !game.presentedView"
-    back="/"
-    back-label="Home"
-  >
-    <WaitingRoom v-if="game.status === 'waiting'" :code="code" />
+  <AppPage v-else-if="screen !== 'game'" back="/" back-label="Home">
+    <WaitingRoom v-if="screen === 'waiting'" :code="code" />
     <p v-else role="status">Connecting…</p>
   </AppPage>
 

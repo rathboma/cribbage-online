@@ -281,6 +281,26 @@ describe('a presenter that takes its time', () => {
     await vi.waitFor(() => expect(store.busy).toBe(false))
   })
 
+  it('tells the presenter how many more steps are waiting', async () => {
+    const { store } = connect()
+    const queued: number[] = []
+    const finish: (() => void)[] = []
+    store.setPresenter(
+      (_step, info) =>
+        new Promise<void>((resolve) => {
+          queued.push(info.queued)
+          finish.push(resolve)
+        }),
+    )
+    transport.emit(step(1))
+    transport.emit(step(2))
+    transport.emit(step(3))
+    finish[0]!()
+    await vi.waitFor(() => expect(queued).toEqual([0, 1]))
+    finish[1]!()
+    await vi.waitFor(() => expect(queued).toEqual([0, 1, 0]))
+  })
+
   it('waits for any thenable, not only a real Promise', async () => {
     const { store } = connect()
     let finish = () => {}

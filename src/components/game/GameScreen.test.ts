@@ -214,7 +214,7 @@ describe('game screen', () => {
     ).toHaveLength(0)
   })
 
-  it('ignores a second tap that lands on the next card just after one was played', async () => {
+  it('takes no tap for a moment after a card is played, and shows it on the cards', async () => {
     // The opponent is out of cards, so this player keeps the turn after each card.
     const before = workedExample()
     before.play.played[1] = [...before.hands[1]]
@@ -226,19 +226,35 @@ describe('game screen', () => {
     await handCard(wrapper, '3C').trigger('click')
     await flushPromises()
     expect(wrapper.findAll(testId('hand-card'))).toHaveLength(3)
-    expect(handCard(wrapper, '7S').attributes('aria-disabled')).toBeUndefined()
 
-    // The hand has closed up: the same spot (and keyboard focus) is now on the 7.
+    // The hand has closed up: the same spot (and keyboard focus) is now on the 7. A second
+    // tap there is a double tap, not a decision. The cards say so: flat, not to be pressed.
+    expect(handCard(wrapper, '7S').attributes('aria-disabled')).toBe('true')
+    expect(handCard(wrapper, '7S').classes()).toContain('hand-card--idle')
     await handCard(wrapper, '7S').trigger('click')
     await flushPromises()
     expect(act).toHaveBeenCalledTimes(1)
 
-    // A moment later it is a decision again.
+    // A moment later the cards are up again and a tap is a play.
     await vi.advanceTimersByTimeAsync(400)
+    expect(handCard(wrapper, '7S').attributes('aria-disabled')).toBeUndefined()
+    expect(handCard(wrapper, '7S').classes()).toContain('hand-card--usable')
     await handCard(wrapper, '7S').trigger('click')
     await flushPromises()
     expect(act).toHaveBeenCalledTimes(2)
     expect(act.mock.calls[1]?.[2]).toMatchObject({ action: { type: 'play', card: '7S' } })
+  })
+
+  it('shows that a tap was taken while the move is on its way', async () => {
+    const wrapper = await open(workedExample())
+    act.mockReturnValue(new Promise(() => {})) // a slow connection
+    expect(handCard(wrapper, '7S').classes()).toContain('hand-card--usable')
+    await handCard(wrapper, '7S').trigger('click')
+    // Every card drops flat at once: the tap registered, and no other can be made.
+    for (const card of wrapper.findAll(testId('hand-card'))) {
+      expect(card.classes()).toContain('hand-card--idle')
+      expect(card.attributes('aria-disabled')).toBe('true')
+    }
   })
 
   it('takes no move while the screen is still catching up with the server', async () => {

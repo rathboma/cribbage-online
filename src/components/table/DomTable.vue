@@ -18,7 +18,7 @@ const props = defineProps<{
   seats: Seats
   /** Cards picked for the crib (v-model:selected). */
   selected: readonly CardId[]
-  /** A move is on its way to the server: nothing can be picked meanwhile. */
+  /** Nothing can be picked or played right now (a move is on its way, say). */
   busy: boolean
 }>()
 
@@ -41,9 +41,11 @@ type CardState = 'idle' | 'usable' | 'selected' | 'blocked'
 function stateOf(card: CardId): CardState {
   if (picking.value) {
     if (props.selected.includes(card)) return 'selected'
+    if (props.busy) return 'idle'
     return props.selected.length >= DISCARD_COUNT ? 'blocked' : 'usable'
   }
-  if (onTurn.value) return playable.value.has(card) ? 'usable' : 'blocked'
+  // While busy the cards lie flat: that is how a tap shows it was taken.
+  if (onTurn.value && !props.busy) return playable.value.has(card) ? 'usable' : 'blocked'
   return 'idle'
 }
 

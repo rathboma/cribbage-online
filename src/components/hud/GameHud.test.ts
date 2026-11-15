@@ -21,7 +21,7 @@ function mountHud(
     status?: GameStatus
     events?: GameEvent[]
     selected?: CardId[]
-    busy?: boolean
+    sending?: boolean
   } = {},
 ) {
   return mount(GameHud, {
@@ -31,7 +31,7 @@ function mountHud(
       seats: seats(view.seat),
       events: options.events ?? [],
       selected: options.selected ?? [],
-      busy: options.busy ?? false,
+      sending: options.sending ?? false,
     },
     slots: { default: () => h('div', { 'data-testid': 'the-table' }) },
     global: { stubs: { RouterLink: RouterLinkStub } },
@@ -215,7 +215,7 @@ describe('action buttons', () => {
         seats: seats(0),
         events: [],
         selected: [],
-        busy: false,
+        sending: false,
       },
       attachTo: document.body,
       global: { stubs: { RouterLink: RouterLinkStub } },
@@ -243,7 +243,7 @@ describe('action buttons', () => {
   it('ignores clicks while a move is on its way', async () => {
     const wrapper = mountHud(
       viewWhen(0, (s) => s.phase === 'show'),
-      { busy: true },
+      { sending: true },
     )
     const button = wrapper.get(testId('action-ready'))
     expect(button.attributes('aria-disabled')).toBe('true')

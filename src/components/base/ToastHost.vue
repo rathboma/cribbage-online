@@ -22,6 +22,8 @@ const errors = computed(() => store.toasts.filter((t) => t.kind === 'error'))
       :key="toast.id"
       class="toast-host__toast"
       :class="`toast-host__toast--${toast.kind}`"
+      data-testid="toast"
+      :data-kind="toast.kind"
       @mouseenter="store.hold(toast.id)"
       @mouseleave="store.release(toast.id)"
       @focusin="store.hold(toast.id)"

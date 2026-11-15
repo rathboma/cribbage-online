@@ -65,10 +65,16 @@ describe('game screen', () => {
       view: viewWhen(0, (s) => s.phase === 'discard'),
       players: PLAYERS,
     })
+    // Each new screen takes the focus to its heading, so a screen reader announces it.
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    expect(wrapper.get('h1').text()).toBe('Send this code to a friend')
+
     await vi.advanceTimersByTimeAsync(1000)
     expect(wrapper.find('[data-testid="game-code"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="game"]').attributes('data-phase')).toBe('discard')
     expect(wrapper.findAll('[data-testid="hand-card"]')).toHaveLength(6)
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    expect(wrapper.get('h1').text()).toBe('Game BCDFG')
   })
 
   it('says it is connecting until the first answer arrives', async () => {

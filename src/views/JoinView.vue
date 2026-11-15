@@ -315,6 +315,7 @@ watch(
 .join__settings {
   margin: calc(-1 * var(--space-2)) 0 var(--space-5);
   color: var(--color-ink-muted);
+  overflow-wrap: anywhere;
 }
 .join__error {
   margin: 0;

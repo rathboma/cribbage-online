@@ -29,8 +29,11 @@ import {
   type Step,
 } from '@/api/transport'
 
-/** Shows a step. May return a promise (e.g. while animating); the view is committed after it. */
-export type Presenter = (step: Step) => void | PromiseLike<void>
+/**
+ * Shows a step. May return a promise (e.g. while animating); the view is committed after it.
+ * `queued` is how many more steps are already waiting, so an animation can hurry or skip.
+ */
+export type Presenter = (step: Step, info: { queued: number }) => void | PromiseLike<void>
 
 const showAtOnce: Presenter = () => {}
 
@@ -144,7 +147,7 @@ export const useGameStore = defineStore('game', () => {
       transport.onConnection((state) => (connection.value = state)),
       transport.onFatal((error) => {
         fatalError.value = error
-        // The token can't be used again: forget it so the home screen doesn't offer it.
+        // The token can't be used again: forget it.
         removeSession(gameCode)
       }),
     ]
@@ -204,7 +207,7 @@ export const useGameStore = defineStore('game', () => {
       const step = pending.shift() as Step
       let result: void | PromiseLike<void>
       try {
-        result = presenter(step)
+        result = presenter(step, { queued: pending.length })
       } catch (err) {
         console.error('Presenter failed', err)
         result = undefined
@@ -232,7 +235,11 @@ export const useGameStore = defineStore('game', () => {
     if (step.view) presentedView.value = step.view
   }
 
-  /** Replaces the presenter (the 3D table's animation director); returns a function to undo it. */
+  /**
+   * Replaces the presenter (the 3D table's animation director); returns a function to undo
+   * it. Steps are presented the moment they arrive, so a presenter that should see the opening
+   * deal must be set before `connect()`, not when the game screen appears.
+   */
   function setPresenter(next: Presenter): () => void {
     presenter = next
     return () => {

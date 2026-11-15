@@ -31,12 +31,15 @@ defineProps<{ back?: RouteLocationRaw; backLabel?: string }>()
 .app-page :slotted(h1) {
   margin: 0 0 var(--space-4);
   font-size: var(--font-size-2xl);
+  /* A 20-letter name with no spaces must wrap, not push the page wider than the screen. */
+  overflow-wrap: anywhere;
 }
 .app-page :slotted(h1:focus) {
   outline: none;
 }
 .app-page__panel {
   width: 100%;
+  min-width: 0;
   max-width: 28rem;
   padding: var(--space-6) var(--space-5);
   border-radius: var(--radius-lg);

@@ -35,14 +35,15 @@ export interface GameTransport {
   send(action: ClientAction, hand: number): Promise<void>
   onStep(listener: (step: Step) => void): () => void
   onConnection(listener: (state: ConnectionState) => void): () => void
-  /** The server says the game or this seat is gone (401/404/410): syncing has stopped. */
+  /** The server says the game is gone or the seat's token is wrong: syncing has stopped. */
   onFatal(listener: (error: ApiError) => void): () => void
   /** Polls very often while on (WebRTC signalling, P5.4). */
   setBoost(on: boolean): void
   /**
    * The user did something: go back to the active polling intervals. Polls at once if polling
-   * had slowed down (idle, hidden tab, finished game, error backoff); at an active rate the
-   * next poll is already close, so nothing extra is sent.
+   * had slowed down (idle, hidden tab, error backoff), at most once a second however many taps
+   * there are. At an active rate the next poll is already close, and in a finished game there
+   * is nothing to hurry for, so nothing extra is sent.
    */
   nudge(): void
   /** Starts polling again after a pause. */
@@ -129,6 +130,8 @@ export class PollingTransport implements GameTransport {
   private pendingDelay: number | null = null
   private lastChange = 0
   private lastActivity = 0
+  /** When activity last caused a poll, so a burst of taps is one request. */
+  private lastNudgePoll = Number.NEGATIVE_INFINITY
   private endedAt: number | null = null
   /** Requests run one at a time, in order: polls and moves never overlap. */
   private queue: Promise<unknown> = Promise.resolve()
@@ -220,12 +223,18 @@ export class PollingTransport implements GameTransport {
   }
 
   nudge(): void {
-    this.lastActivity = this.env.now()
+    const now = this.env.now()
+    this.lastActivity = now
     if (this.stopped || this.paused) return
     // No timer: a request is in flight, and the delay after it will already count this
     // activity. A short timer: the next poll is a moment away. Either way, an extra request
     // for every tap or key press would only add load.
     if (this.pendingDelay === null || this.pendingDelay <= POLL.myMove) return
+    // A finished game is polled slowly on purpose: reading the result is not a reason to ask
+    // the server again. Otherwise poll now, but only once for a burst of taps or key presses
+    // (the delay after an ended or failed poll is long again, so each one would qualify).
+    if (this.endedAt !== null || now - this.lastNudgePoll < POLL.waiting) return
+    this.lastNudgePoll = now
     this.schedule(0)
   }
 

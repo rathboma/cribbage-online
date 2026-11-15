@@ -213,6 +213,42 @@ describe('PollingTransport', () => {
     expect(await gapBeforeNextSync(t.sync)).toBe(POLL.waiting)
   })
 
+  it('sends nothing extra for activity in a finished game', async () => {
+    const t = setup()
+    t.answers.push(response({ status: 'finished', view: view({ phase: 'game_over' }) }))
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(0)
+    const calls = t.sync.mock.calls.length
+    // Scrolling through the result with the keyboard, tapping around: none of it is a reason
+    // to ask the server again.
+    for (let i = 0; i < 25; i++) {
+      t.transport.nudge()
+      await vi.advanceTimersByTimeAsync(80)
+    }
+    expect(t.sync.mock.calls.length).toBe(calls)
+    await vi.advanceTimersByTimeAsync(POLL.ended)
+    expect(t.sync.mock.calls.length).toBe(calls + 1)
+  })
+
+  it('polls once for a burst of taps while the connection is failing', async () => {
+    const t = setup()
+    const offline = () => new ApiError(0, 'network', 'offline')
+    t.answers.push(...Array.from({ length: 12 }, offline))
+    t.transport.start(0)
+    await vi.advanceTimersByTimeAsync(20_000) // five failures: the next try is 16s away
+    const calls = t.sync.mock.calls.length
+    for (let i = 0; i < 10; i++) {
+      t.transport.nudge()
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    expect(t.sync.mock.calls.length).toBe(calls + 1)
+    // A second later, another tap is another try.
+    await vi.advanceTimersByTimeAsync(1000)
+    t.transport.nudge()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.sync.mock.calls.length).toBe(calls + 2)
+  })
+
   it('counts activity during a request, so the backoff still resets', async () => {
     const t = setup()
     t.transport.start(0)

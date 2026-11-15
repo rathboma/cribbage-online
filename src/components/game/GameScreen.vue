@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { CardId } from '@shared/protocol'
 import { friendlyError } from '@/api/messages'
@@ -49,15 +49,26 @@ async function act(move: () => Promise<void>) {
 
 // When a card leaves the hand the others close up, so a second tap in the same place (or a
 // second Enter: focus moves to the next card) would hit a different card. Right after the
-// hand changes, a play is far more likely a double tap than a decision, so it is ignored.
-const PLAY_PAUSE_MS = 400
-let handChangedAt = 0
+// hand changes, a tap is far more likely a double tap than a decision, so for a moment the
+// table takes none - and shows it: the cards lie flat until they can be played again.
+const HAND_SETTLE_MS = 400
+const settling = ref(false)
+let settleTimer: ReturnType<typeof setTimeout> | undefined
 watch(
   () => view.value?.myHand.length,
-  () => (handChangedAt = Date.now()),
+  (now, before) => {
+    if (before === undefined || now === undefined) return
+    settling.value = true
+    clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => (settling.value = false), HAND_SETTLE_MS)
+  },
 )
+onBeforeUnmount(() => clearTimeout(settleTimer))
+/** The table takes no input: a move is out, the screen is catching up, or the hand just moved. */
+const tableBusy = computed(() => game.busy || settling.value)
+
 function play(card: CardId) {
-  if (Date.now() - handChangedAt < PLAY_PAUSE_MS) return
+  if (tableBusy.value) return
   void act(() => game.play(card))
 }
 
@@ -87,7 +98,7 @@ const tableVisible = computed(
       :seats="seats"
       :events="game.handEvents"
       :selected="picked"
-      :busy="game.busy"
+      :sending="game.sending"
       @discard="discard"
       @cut="act(game.cut)"
       @go="act(game.go)"
@@ -98,7 +109,7 @@ const tableVisible = computed(
           v-model:selected="selected"
           :view="view"
           :seats="seats"
-          :busy="game.busy"
+          :busy="tableBusy"
           @play="play"
         />
       </template>

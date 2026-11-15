@@ -24,8 +24,8 @@ const props = defineProps<{
   events: readonly GameEvent[]
   /** Cards picked for the crib on the table. */
   selected: readonly CardId[]
-  /** A move is on its way to the server. */
-  busy: boolean
+  /** A move is on its way to the server (the button that sent it shows it is working). */
+  sending: boolean
 }>()
 
 defineEmits<{ discard: []; cut: []; go: []; ready: [] }>()
@@ -110,16 +110,17 @@ watch(
           :seats="seats"
         />
         <ShowPanel v-if="counted" :show="view.show" :starter="view.starter" :seats="seats" />
-        <button
-          v-if="moreBelow"
-          type="button"
-          class="game-hud__more"
-          data-testid="more-below"
-          @click="scrollOn"
-        >
-          More below <span aria-hidden="true">↓</span>
-        </button>
       </div>
+      <!-- Under the panels, not over them: it must never cover a button or a total. -->
+      <button
+        v-if="moreBelow"
+        type="button"
+        class="game-hud__more on-dark"
+        data-testid="more-below"
+        @click="scrollOn"
+      >
+        More below <span aria-hidden="true">↓</span>
+      </button>
     </div>
 
     <div ref="tray" class="game-hud__tray">
@@ -130,7 +131,7 @@ watch(
       <ActionBar
         :legal="view.legal"
         :selected-count="selected.length"
-        :busy="busy"
+        :busy="sending"
         @discard="$emit('discard')"
         @cut="$emit('cut')"
         @go="$emit('go')"
@@ -180,18 +181,16 @@ watch(
   overflow-y: auto;
   border-radius: var(--radius-lg);
 }
-/* Floats at the bottom edge of the panels while part of them is out of sight. */
+/* Shown while part of the panels is out of sight. */
 .game-hud__more {
-  position: sticky;
-  bottom: var(--space-2);
-  justify-self: center;
+  flex: none;
+  align-self: center;
   min-height: 2.25rem;
-  margin-top: calc(-2.25rem - var(--space-2));
   padding: 0 var(--space-4);
   border: 0;
   border-radius: var(--radius-pill);
-  background: var(--color-ink);
-  color: var(--color-cream);
+  background: var(--color-cream);
+  color: var(--color-ink);
   box-shadow: var(--shadow-md);
   font: inherit;
   font-size: var(--font-size-sm);

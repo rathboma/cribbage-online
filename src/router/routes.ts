@@ -48,8 +48,8 @@ export const routes: RouteRecordRaw[] = [
     beforeEnter: [canonicalCode, requireSession],
     meta: { title: (route: RouteLocationNormalized) => `Game ${String(route.params.code)}` },
   },
-  // Client-side "not found". There is deliberately no static 404.html in the build:
-  // Cloudflare Pages only falls back to index.html for deep links when none exists.
+  // Client-side "not found": the Worker serves index.html for any path that is not a file
+  // (not_found_handling in wrangler.jsonc), and this route shows the message.
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
