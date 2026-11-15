@@ -11,11 +11,11 @@
   "scripts": {
     "dev": "yarn -s db:migrate:local && run-p --race dev:api dev:client",
     "dev:client": "vite",
-    "dev:api": "wrangler pages dev --ip 127.0.0.1 --port 8788 --show-interactive-dev-session=false",
+    "dev:api": "wrangler dev --ip 127.0.0.1 --port 8788 --show-interactive-dev-session=false",
     "build": "vite build && yarn -s build:functions",
     "build:functions": "wrangler pages functions build --outdir .wrangler/functions-build",
     "preview": "vite preview",
-    "preview:pages": "yarn build && yarn -s db:migrate:local && wrangler pages dev",
+    "preview:worker": "yarn -s db:migrate:local && wrangler dev",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint . --fix && prettier --write .",
     "format": "prettier --write .",
@@ -23,6 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate:local": "wrangler d1 migrations apply cribbage --local",
+    "deploy": "sh scripts/deploy.sh",
     "bot:play": "tsx scripts/bot-play.ts"
   },
   "dependencies": {

@@ -24,29 +24,36 @@ yarn dev          # app at http://localhost:5173, API at /api (local D1)
 | `yarn dev`              | Applies local migrations, then runs Vite (hot reload) and the API together       |
 | `yarn build`            | Production build into `dist/`, and a compile check of `functions/`               |
 | `yarn preview`          | Serve the built client (with `/api` still forwarded to port 8788)                |
-| `yarn preview:pages`    | Build, migrate, then serve `dist/` and the Functions exactly as Pages would      |
+| `yarn preview:worker`   | Build, migrate, then run the production Worker locally (assets and API)          |
 | `yarn lint`             | ESLint, then a Prettier check (`yarn lint:fix` fixes what it can)                |
 | `yarn typecheck`        | `vue-tsc` over the client, shared code, Functions, tests and config files        |
 | `yarn test`             | All unit tests once: shared, client and server (`yarn test:watch` keeps running) |
 | `yarn db:migrate:local` | Apply new files in `migrations/` to the local D1 database                        |
 | `yarn bot:play`         | Two bots play a whole game against a running `yarn dev` (`--url`, `--seed`)      |
+| `yarn deploy`           | Migrate the production D1 database and deploy the Worker (see Deployment)        |
 
 Before pushing, run `yarn lint && yarn typecheck && yarn test && yarn build`. CI
 (`.github/workflows/ci.yml`) runs the same checks on every pull request and every push to `main`.
 
 ### Local Cloudflare workflow
 
-The API is made of [Cloudflare Pages Functions](https://developers.cloudflare.com/pages/functions/)
-backed by a [D1](https://developers.cloudflare.com/d1/) (SQLite) database. Everything runs locally
-through `wrangler`; no Cloudflare account is needed for development.
+The site is one [Cloudflare Worker](https://developers.cloudflare.com/workers/): the built client
+in `dist/` is served as [static assets](https://developers.cloudflare.com/workers/static-assets/),
+and the API runs as the Worker, backed by a [D1](https://developers.cloudflare.com/d1/) (SQLite)
+database. The API is written as [Pages Functions](https://developers.cloudflare.com/pages/functions/)
+(file-based routes in `functions/`); `yarn build` compiles them into the Worker's entry point
+(`.wrangler/functions-build/index.js`). Everything runs locally through `wrangler`; no Cloudflare
+account is needed for development.
 
-- **Two servers, one URL.** `yarn dev` starts `wrangler pages dev` on port 8788 for the Functions and
-  Vite on port 5173 for the client. Vite forwards every `/api/*` request to wrangler, so always open
+- **Two servers, one URL.** `yarn dev` starts `wrangler dev` on port 8788 for the API and Vite on
+  port 5173 for the client. Vite forwards every `/api/*` request to wrangler, so always open
   the app at http://localhost:5173. Edits to `functions/`, `server/` and `shared/` rebuild the API
   automatically.
-- **Config** is in `wrangler.jsonc`. The D1 binding is `DB` (database `cribbage`). Its
-  `database_id` is a placeholder until the real databases exist (#6). Wrangler names the local
-  database file after that id, so changing it starts you on a new, empty local database.
+- **Config** is in `wrangler.jsonc`. The D1 binding is `DB` (database `cribbage`). It has no
+  `database_id`: wrangler finds the database by name, and the first deploy creates it.
+- **Routing.** Requests for `/api/*` go to the Worker; everything else is a static file, and any
+  other path (a deep link such as `/j/BCDFG`) gets the app's `index.html`, whose router shows its
+  own "not found" page.
 - **Local data** lives in `.wrangler/state/` (git-ignored). Delete that folder to start from an empty
   database.
 - **Migrations** are numbered SQL files in `migrations/` (`0001_create_games.sql`, ...). Create one
@@ -61,7 +68,7 @@ through `wrangler`; no Cloudflare account is needed for development.
   the bindings is in `server/env.ts`.
 - **Server tests** in `server/**/*.test.ts` run inside the Workers runtime with
   [`@cloudflare/vitest-plugin`](https://developers.cloudflare.com/workers/testing/vitest-integration/).
-  Before they start, `functions/` is compiled into a Worker with the same bundler Pages uses, and
+  Before they start, `functions/` is compiled into a Worker the same way `yarn build` does it, and
   all migrations are applied to a throwaway local D1. Call routes with
   `exports.default.fetch(...)` and reach the database with `env.DB`, both from `cloudflare:workers`.
   - Routes run from that pre-built bundle, so `vi.mock()` of a `server/` module does not reach
@@ -70,13 +77,30 @@ through `wrangler`; no Cloudflare account is needed for development.
   - The database is shared by all tests in one file: use unique game codes or clean up.
   - Tests don't read `.dev.vars`; bindings they need are set in `vitest.config.ts`.
 
+### Deployment
+
+Cloudflare builds and deploys the Worker from this repository (Workers Builds).
+
+- **Deploy command:** `yarn deploy` (in the Cloudflare dashboard: the Worker's Settings → Build).
+  It applies pending D1 migrations, then runs `wrangler deploy`, which builds first (`yarn build`,
+  from the `build` section of `wrangler.jsonc`). Leave the build command empty.
+- **First deploy:** there is no D1 database yet; `wrangler deploy` creates one named `cribbage` and
+  the migrations run right after.
+- With the default deploy command (`npx wrangler deploy`) the site still deploys, but migrations
+  never run, so the API fails until they are applied (`npx wrangler d1 migrations apply cribbage
+  --remote`).
+- **Previews:** builds of other branches upload preview versions of the same Worker, with the same
+  bindings, so they use the production database. Turn branch builds off, or point previews at a
+  separate database, before relying on them.
+- **Node:** builds need Node 24 (`.nvmrc`).
+
 ### Folder layout
 
 | Folder        | What lives there                                                                                                        |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `src/`        | The Vue client: `views/` (one per route), `components/`, `stores/` (Pinia), `api/` (HTTP client), `three/` (3D table), `rtc/` (video) |
 | `shared/`     | TypeScript used by both the client and the server: `engine/` (the rules) and `protocol/` (the API contract; import it from `shared/protocol`, and only the server may import `protocol/schemas`). No DOM, Node or Cloudflare APIs |
-| `functions/`  | Cloudflare Pages Functions: route files only (a file's path is its URL)                                                 |
+| `functions/`  | API routes, written as Pages Functions: route files only (a file's path is its URL)                                      |
 | `server/`     | Server-only helpers imported by `functions/` (database access, auth, rate limits)                                       |
 | `migrations/` | D1 SQL migrations                                                                                                       |
 | `e2e/`        | Playwright end-to-end tests                                                                                             |
