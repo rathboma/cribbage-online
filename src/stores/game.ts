@@ -10,6 +10,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import type {
   CardId,
   ClientAction,
+  GameEvent,
   GameStatus,
   PlayerInfo,
   PlayerView,
@@ -33,6 +34,16 @@ export type Presenter = (step: Step) => void | Promise<void>
 
 const showAtOnce: Presenter = () => {}
 
+/**
+ * Keeps only the events of the latest hand: from its `hand_dealt` on (and the cut for first
+ * deal just before it), so the list never grows past one hand's worth.
+ */
+export function eventsOfCurrentHand(events: GameEvent[]): GameEvent[] {
+  const dealt = events.map((e) => e.type).lastIndexOf('hand_dealt')
+  if (dealt <= 0) return events
+  return events.slice(events[dealt - 1]?.type === 'cut_for_deal' ? dealt - 1 : dealt)
+}
+
 type OtherKind = Exclude<ServerEventKind, 'game'>
 type EventListener = (event: ServerEvent) => void
 
@@ -50,6 +61,12 @@ export const useGameStore = defineStore('game', () => {
   const players = shallowRef<PlayerInfo[]>([])
   const view = shallowRef<PlayerView | null>(null)
   const presentedView = shallowRef<PlayerView | null>(null)
+  /**
+   * The game events of the hand on screen, oldest first, committed together with
+   * `presentedView`. The HUD words them ("Sam played 8♣ - fifteen for 2"). Starts again at each
+   * deal, and is empty after a reload (a reload snaps to the present without replaying events).
+   */
+  const handEvents = shallowRef<GameEvent[]>([])
   const connection = ref<ConnectionState>('connecting')
   /** Set when the server says this game or seat is gone; syncing has stopped. */
   const fatalError = shallowRef<ApiError | null>(null)
@@ -132,6 +149,7 @@ export const useGameStore = defineStore('game', () => {
     players.value = []
     view.value = null
     presentedView.value = null
+    handEvents.value = []
     connection.value = 'connecting'
     fatalError.value = null
     sending.value = false
@@ -178,6 +196,8 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function commit(step: Step) {
+    const fresh = step.events.flatMap((e) => (e.kind === 'game' ? e.payload.events : []))
+    if (fresh.length) handEvents.value = eventsOfCurrentHand([...handEvents.value, ...fresh])
     if (step.view) presentedView.value = step.view
   }
 
@@ -215,6 +235,7 @@ export const useGameStore = defineStore('game', () => {
     players,
     view,
     presentedView,
+    handEvents,
     connection,
     fatalError,
     sending,

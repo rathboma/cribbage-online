@@ -4,6 +4,7 @@ import { takeStartCursor } from '@/api'
 import { friendlyError } from '@/api/messages'
 import AppPage from '@/components/AppPage.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import GameScreen from '@/components/game/GameScreen.vue'
 import WaitingRoom from '@/components/WaitingRoom.vue'
 import { useGameStore } from '@/stores/game'
 
@@ -27,16 +28,15 @@ const fatalMessage = computed(() => (game.fatalError ? friendlyError(game.fatalE
     <BaseButton to="/" block>Go to the start page</BaseButton>
   </AppPage>
 
-  <AppPage v-else-if="game.status === 'waiting' || game.status === null" back="/" back-label="Home">
+  <!-- Until the first view is on screen (and while the host waits for a second player). -->
+  <AppPage
+    v-else-if="game.status === 'waiting' || game.status === null || !game.presentedView"
+    back="/"
+    back-label="Home"
+  >
     <WaitingRoom v-if="game.status === 'waiting'" :code="code" />
     <p v-else role="status">Connecting…</p>
   </AppPage>
 
-  <AppPage v-else back="/" back-label="Home">
-    <h1>Game {{ code }}</h1>
-    <p data-testid="game-started">
-      Your opponent is here. (The table arrives in P3.5, #24.) Phase:
-      {{ game.presentedView?.phase }}
-    </p>
-  </AppPage>
+  <GameScreen v-else :code="code" />
 </template>

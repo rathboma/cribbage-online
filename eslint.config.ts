@@ -111,6 +111,48 @@ export default defineConfigWithVueTs(
   },
 
   {
+    // The HUD is shared by the simple table and the 3D table, so it must not know either;
+    // and a table must work under any HUD. GameScreen is where they meet.
+    name: 'app/hud-and-table-stay-apart',
+    files: ['src/components/hud/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { regex: '^zod(/|$)', message: zodMessage },
+            { regex: 'protocol/schemas', message: zodMessage },
+            {
+              regex: '(^|/)(table|three)(/|$)',
+              message: 'The HUD must not import from a table. Wire them together in GameScreen.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    name: 'app/table-does-not-import-hud',
+    files: ['src/components/table/**/*.{ts,vue}', 'src/three/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { regex: '^zod(/|$)', message: zodMessage },
+            { regex: 'protocol/schemas', message: zodMessage },
+            {
+              regex: '(^|/)hud(/|$)',
+              message: 'A table must not import from the HUD. Wire them together in GameScreen.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
     name: 'app/relative-imports-on-server',
     files: ['functions/**/*.ts', 'server/**/*.ts'],
     rules: {

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
-import type { PlayerView, ServerEvent } from '@shared/protocol'
+import type { GameEvent, PlayerView, ServerEvent } from '@shared/protocol'
 import { ApiError, type ApiClient } from '@/api/client'
 import { loadSession, saveSession } from '@/api/session'
 import type { ConnectionState, GameTransport, Step } from '@/api/transport'
-import { useGameStore } from './game'
+import { eventsOfCurrentHand, useGameStore } from './game'
 
 function view(hand: number, myMove = false): PlayerView {
   return {
@@ -246,5 +246,93 @@ describe('useGameStore', () => {
     visibility.mockReturnValue('visible')
     document.dispatchEvent(new Event('visibilitychange'))
     expect(document.title).toBe('Cribbage')
+  })
+})
+
+describe('the events of the hand on screen', () => {
+  let nextId = 1
+  /** One server event carrying the engine events of one move. */
+  const move = (...events: GameEvent[]): ServerEvent => ({
+    id: nextId++,
+    at: 0,
+    kind: 'game',
+    payload: { events },
+  })
+  const played = (card: '5H' | '6H' | '7H'): GameEvent => ({
+    type: 'card_played',
+    seat: 0,
+    card,
+    count: 5,
+  })
+  const types = (events: GameEvent[]) => events.map((e) => e.type)
+
+  it('collects game events in order as their steps are shown', () => {
+    const { store } = connect(0)
+    expect(store.handEvents).toEqual([])
+    transport.emit(
+      step(1, [
+        move(
+          { type: 'cut_for_deal', cards: ['4C', 'KD'], dealer: 0 },
+          { type: 'hand_dealt', hand: 1, dealer: 0 },
+        ),
+      ]),
+    )
+    transport.emit(step(1, [move({ type: 'discarded', seat: 0 }), move(played('5H'))]))
+    expect(types(store.handEvents)).toEqual([
+      'cut_for_deal',
+      'hand_dealt',
+      'discarded',
+      'card_played',
+    ])
+  })
+
+  it('ignores chat, signal and system events', () => {
+    const { store } = connect(0)
+    transport.emit(
+      step(1, [{ id: 1, at: 0, kind: 'chat', payload: { text: 'hi' } }, move(played('5H'))]),
+    )
+    expect(types(store.handEvents)).toEqual(['card_played'])
+  })
+
+  it('starts again at each deal, so the list never outgrows one hand', () => {
+    const { store } = connect(0)
+    transport.emit(step(1, [move(played('5H')), move(played('6H'))]))
+    transport.emit(step(2, [move({ type: 'hand_dealt', hand: 2, dealer: 1 }), move(played('7H'))]))
+    expect(store.handEvents).toEqual([{ type: 'hand_dealt', hand: 2, dealer: 1 }, played('7H')])
+  })
+
+  it('appears together with the view, after the presenter has shown the step', async () => {
+    const { store } = connect(0)
+    let finish = () => {}
+    store.setPresenter(() => new Promise<void>((resolve) => (finish = resolve)))
+    transport.emit(step(1, [move(played('5H'))]))
+    expect(store.handEvents).toEqual([])
+    expect(store.presentedView).toBeNull()
+    finish()
+    await vi.waitFor(() => expect(store.presentedView?.hand).toBe(1))
+    expect(types(store.handEvents)).toEqual(['card_played'])
+  })
+
+  it('is empty again after reconnecting (a reload replays nothing)', () => {
+    const { store } = connect(0)
+    transport.emit(step(1, [move(played('5H'))]))
+    store.connect('BCDFG', { api, transport: () => transport })
+    expect(store.handEvents).toEqual([])
+  })
+
+  it('keeps the cut for first deal with the first hand', () => {
+    const cut: GameEvent = { type: 'cut_for_deal', cards: ['4C', 'KD'], dealer: 0 }
+    const dealt = (hand: number): GameEvent => ({ type: 'hand_dealt', hand, dealer: 0 })
+    expect(eventsOfCurrentHand([cut, dealt(1), played('5H')])).toEqual([
+      cut,
+      dealt(1),
+      played('5H'),
+    ])
+    expect(eventsOfCurrentHand([played('5H'), dealt(2), played('6H')])).toEqual([
+      dealt(2),
+      played('6H'),
+    ])
+    expect(eventsOfCurrentHand([played('5H')])).toEqual([played('5H')])
+    expect(eventsOfCurrentHand([])).toEqual([])
   })
 })

@@ -98,7 +98,7 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
 
 | Folder        | What lives there                                                                                                        |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `src/`        | The Vue client: `views/` (one per route), `components/`, `stores/` (Pinia), `api/` (HTTP client), `three/` (3D table), `rtc/` (video) |
+| `src/`        | The Vue client: `views/` (one per route), `components/` (`hud/` around the table, `table/` the simple DOM table, `game/` where they meet the store), `game/` (prompts, narration and card names as plain functions), `stores/` (Pinia), `api/` (HTTP client), `three/` (3D table), `rtc/` (video) |
 | `shared/`     | TypeScript used by both the client and the server: `engine/` (the rules) and `protocol/` (the API contract; import it from `shared/protocol`, and only the server may import `protocol/schemas`). No DOM, Node or Cloudflare APIs |
 | `functions/`  | API routes, written as Pages Functions: route files only (a file's path is its URL)                                      |
 | `server/`     | Server-only helpers imported by `functions/` (database access, auth, rate limits)                                       |

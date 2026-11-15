@@ -8,6 +8,7 @@ import { ApiError, type ApiClient } from '@/api/client'
 import { loadSession, saveSession } from '@/api/session'
 import App from '@/App.vue'
 import { routes } from '@/router/routes'
+import { PLAYERS, viewWhen } from '@/test/game'
 
 let restore: () => void
 let sync: ReturnType<typeof vi.fn>
@@ -61,11 +62,21 @@ describe('game screen', () => {
       ...waiting,
       status: 'active',
       version: 1,
-      view: { phase: 'discard', hand: 1, legal: noMoves } as unknown as PlayerView,
+      view: viewWhen(0, (s) => s.phase === 'discard'),
+      players: PLAYERS,
     })
     await vi.advanceTimersByTimeAsync(1000)
     expect(wrapper.find('[data-testid="game-code"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="game-started"]').text()).toContain('discard')
+    expect(wrapper.get('[data-testid="game"]').attributes('data-phase')).toBe('discard')
+    expect(wrapper.findAll('[data-testid="hand-card"]')).toHaveLength(6)
+  })
+
+  it('says it is connecting until the first answer arrives', async () => {
+    sync.mockReturnValue(new Promise(() => {}))
+    const { wrapper } = await open('/g/BCDFG')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.get('main [role="status"]').text()).toBe('Connecting…')
+    expect(wrapper.find('[data-testid="game"]').exists()).toBe(false)
   })
 
   it('snaps to the present after a reload (no start cursor)', async () => {
