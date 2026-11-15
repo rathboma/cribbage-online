@@ -11,8 +11,10 @@ import CardFanLogo from '@/components/CardFanLogo.vue'
       <h1 class="landing__title">Cribbage</h1>
       <p class="landing__pitch">Play cribbage with a friend. No signup.</p>
       <nav class="landing__actions" aria-label="Get started">
-        <BaseButton to="/new" size="lg" block>Start game</BaseButton>
-        <BaseButton to="/join" size="lg" variant="secondary" block>Join game</BaseButton>
+        <BaseButton to="/new" size="lg" block data-testid="start-game">Start game</BaseButton>
+        <BaseButton to="/join" size="lg" variant="secondary" block data-testid="join-game">
+          Join game
+        </BaseButton>
       </nav>
     </div>
   </AppPage>

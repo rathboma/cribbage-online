@@ -56,11 +56,17 @@ async function start() {
     <form class="new-game" novalidate @submit.prevent="start">
       <fieldset class="new-game__options">
         <legend class="visually-hidden">Options</legend>
-        <ToggleSwitch v-model="chatOn" label="Chat" description="Send messages during the game." />
+        <ToggleSwitch
+          v-model="chatOn"
+          label="Chat"
+          description="Send messages during the game."
+          data-testid="chat-toggle"
+        />
         <ToggleSwitch
           v-model="videoOn"
           label="Video"
           description="Connects directly between the two players."
+          data-testid="video-toggle"
         >
           <template #badge><BaseBadge>Beta</BaseBadge></template>
         </ToggleSwitch>
@@ -73,9 +79,14 @@ async function start() {
         autocomplete="nickname"
         autocapitalize="words"
         enterkeyhint="go"
+        data-testid="name-input"
       />
-      <p v-if="error" class="new-game__error" role="alert">{{ error }}</p>
-      <BaseButton type="submit" size="lg" block :loading="busy">Start</BaseButton>
+      <p v-if="error" class="new-game__error" role="alert" data-testid="start-error">
+        {{ error }}
+      </p>
+      <BaseButton type="submit" size="lg" block :loading="busy" data-testid="start-submit">
+        Start
+      </BaseButton>
     </form>
   </AppPage>
 </template>

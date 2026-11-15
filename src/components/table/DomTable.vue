@@ -128,6 +128,9 @@ watch(
                 v-for="item in laid(seats.opponent)"
                 :key="item.card"
                 :class="{ 'dom-table__turned': item.turned }"
+                data-testid="laid-card"
+                :data-card="item.card"
+                :data-turned="item.turned"
               >
                 <PlayingCard :card="item.card" size="sm" />
                 <span v-if="item.turned" class="visually-hidden"> (earlier count)</span>
@@ -168,6 +171,9 @@ watch(
               v-for="item in laid(seats.me)"
               :key="item.card"
               :class="{ 'dom-table__turned': item.turned }"
+              data-testid="laid-card"
+              :data-card="item.card"
+              :data-turned="item.turned"
             >
               <PlayingCard :card="item.card" size="sm" />
               <span v-if="item.turned" class="visually-hidden"> (earlier count)</span>

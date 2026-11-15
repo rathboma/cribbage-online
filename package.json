@@ -22,6 +22,8 @@
     "typecheck": "vue-tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:serve": "sh scripts/e2e-serve.sh",
     "db:migrate:local": "wrangler d1 migrations apply cribbage --local",
     "deploy": "sh scripts/deploy.sh",
     "bot:play": "tsx scripts/bot-play.ts"
@@ -37,6 +39,7 @@
     "@cloudflare/vitest-plugin": "^1.8.2",
     "@cloudflare/workers-types": "^5.20261115.1",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
     "@tsconfig/node24": "^24.0.6",
     "@types/node": "^24.19.2",
     "@vitejs/plugin-vue": "^6.0.11",

@@ -21,7 +21,13 @@ import TextInput from '@/components/base/TextInput.vue'
 const props = defineProps<{ code?: string }>()
 const router = useRouter()
 
-type Problem = { title: string; message: string; retry?: () => void }
+/** `kind` names the problem for tests; players read the title and message. */
+type Problem = {
+  kind: 'not_found' | 'full' | 'finished' | 'bad_link' | 'error'
+  title: string
+  message: string
+  retry?: () => void
+}
 
 const step = ref<'code' | 'name'>('code')
 const codeText = ref('')
@@ -68,9 +74,14 @@ async function check(code: string) {
       await nextTick()
       nameField.value?.focus()
     } else if (found.status === 'finished' || found.status === 'abandoned') {
-      problem.value = { title: 'That game has finished', message: 'Ask for a new code.' }
+      problem.value = {
+        kind: 'finished',
+        title: 'That game has finished',
+        message: 'Ask for a new code.',
+      }
     } else {
       problem.value = {
+        kind: 'full',
         title: 'That game is full',
         message: 'It already has two players. Ask for a new code.',
       }
@@ -86,18 +97,19 @@ function problemFor(err: unknown, retry: () => void): Problem {
   if (err instanceof ApiError) {
     if (err.code === 'game_not_found') {
       return {
+        kind: 'not_found',
         title: 'No game with that code',
         message: 'Check the code (it may have expired) and try again.',
       }
     }
     if (err.code === 'game_full') {
-      return { title: 'That game is full', message: 'It already has two players.' }
+      return { kind: 'full', title: 'That game is full', message: 'It already has two players.' }
     }
     if (err.code === 'game_ended') {
-      return { title: 'That game has finished', message: 'Ask for a new code.' }
+      return { kind: 'finished', title: 'That game has finished', message: 'Ask for a new code.' }
     }
   }
-  return { title: "Couldn't check the code", message: friendlyError(err), retry }
+  return { kind: 'error', title: "Couldn't check the code", message: friendlyError(err), retry }
 }
 
 function submitCode() {
@@ -155,6 +167,7 @@ watch(
       void check(parsed)
     } else {
       problem.value = {
+        kind: 'bad_link',
         title: "That link doesn't look right",
         message: 'Game codes are 5 letters. Type the code instead.',
       }
@@ -166,7 +179,12 @@ watch(
 
 <template>
   <AppPage back="/">
-    <div v-if="problem" class="join__problem">
+    <div
+      v-if="problem"
+      class="join__problem"
+      data-testid="join-problem"
+      :data-problem="problem.kind"
+    >
       <h1>{{ problem.title }}</h1>
       <p role="alert">{{ problem.message }}</p>
       <div class="join__actions">
@@ -198,6 +216,7 @@ watch(
           spellcheck="false"
           enterkeyhint="go"
           :aria-busy="checking || undefined"
+          data-testid="code-input"
         />
         <BaseButton
           type="submit"
@@ -205,6 +224,7 @@ watch(
           block
           :loading="checking"
           :disabled="codeText.length !== 5"
+          data-testid="code-submit"
         >
           Continue
         </BaseButton>
@@ -214,9 +234,14 @@ watch(
 
     <template v-else-if="game">
       <h1>
-        Join <strong>{{ game.hostName }}</strong>'s game
+        Join <strong data-testid="host-name">{{ game.hostName }}</strong>'s game
       </h1>
-      <p class="join__settings">
+      <p
+        class="join__settings"
+        data-testid="host-settings"
+        :data-chat="game.hostChatOn ? 'on' : 'off'"
+        :data-video="game.hostVideoOn ? 'on' : 'off'"
+      >
         {{ game.hostName }} chose: chat {{ game.hostChatOn ? 'on' : 'off' }} · video
         {{ game.hostVideoOn ? 'on' : 'off' }}
       </p>
@@ -230,9 +255,14 @@ watch(
           autocomplete="nickname"
           autocapitalize="words"
           enterkeyhint="go"
+          data-testid="name-input"
         />
-        <p v-if="joinError" class="join__error" role="alert">{{ joinError }}</p>
-        <BaseButton type="submit" size="lg" block :loading="joining">Join game</BaseButton>
+        <p v-if="joinError" class="join__error" role="alert" data-testid="join-error">
+          {{ joinError }}
+        </p>
+        <BaseButton type="submit" size="lg" block :loading="joining" data-testid="join-submit">
+          Join game
+        </BaseButton>
       </form>
     </template>
 

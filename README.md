@@ -28,12 +28,38 @@ yarn dev          # app at http://localhost:5173, API at /api (local D1)
 | `yarn lint`             | ESLint, then a Prettier check (`yarn lint:fix` fixes what it can)                |
 | `yarn typecheck`        | `vue-tsc` over the client, shared code, Functions, tests and config files        |
 | `yarn test`             | All unit tests once: shared, client and server (`yarn test:watch` keeps running) |
+| `yarn e2e`              | End-to-end tests: two real browsers play against the built Worker (see below)    |
 | `yarn db:migrate:local` | Apply new files in `migrations/` to the local D1 database                        |
 | `yarn bot:play`         | Two bots play a whole game against a running `yarn dev` (`--url`, `--seed`)      |
 | `yarn deploy`           | Migrate the production D1 database and deploy the Worker (see Deployment)        |
 
 Before pushing, run `yarn lint && yarn typecheck && yarn test && yarn build`. CI
-(`.github/workflows/ci.yml`) runs the same checks on every pull request and every push to `main`.
+(`.github/workflows/ci.yml`) runs the same checks, and the end-to-end tests, on every pull request
+and every push to `main`.
+
+### End-to-end tests
+
+`yarn e2e` runs the [Playwright](https://playwright.dev/) tests in `e2e/`: one browser starts a
+game, another joins with the code, and they play through the simple (DOM) table by pressing
+whatever the UI offers. The first time, install the browser with
+`npx playwright install chromium`.
+
+- **What they run against.** Playwright builds the app and serves it the way Cloudflare does
+  (`scripts/e2e-serve.sh`: the Worker with static assets, on port 8799, with its own empty local
+  D1 in `.wrangler/e2e`), so deep links such as `/j/CODE` are covered and `yarn dev` data is
+  never touched.
+- **Faster runs.** `yarn e2e --grep-invert @slow` skips the test that plays a whole game to 121
+  (about a minute and a half). To skip the build on every run, keep `yarn e2e:serve` running in
+  another terminal; restart it after changing the app, because it serves the build it started
+  with.
+- **Selectors.** Tests find elements by `data-testid` only, never by wording or layout. Helpers
+  for starting, joining and making moves are in `e2e/table.ts`.
+- **Reproducing a failure.** The server runs with `ENVIRONMENT=test` and `TEST_SEED=e2e`. Deals
+  are derived from the seed, the game code and the move number, so the same code deals the same
+  cards again; the code is random, so two runs do not play the same game. In CI the report, with
+  a trace and screenshot of each failure, is attached to the run as `playwright-report`.
+- The Playwright version is pinned exactly, because each version needs its own browser build:
+  after changing it, run `npx playwright install chromium` again.
 
 ### Local Cloudflare workflow
 
@@ -103,7 +129,7 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
 | `functions/`  | API routes, written as Pages Functions: route files only (a file's path is its URL)                                      |
 | `server/`     | Server-only helpers imported by `functions/` (database access, auth, rate limits)                                       |
 | `migrations/` | D1 SQL migrations                                                                                                       |
-| `e2e/`        | Playwright end-to-end tests                                                                                             |
+| `e2e/`        | Playwright end-to-end tests (`yarn e2e`)                                                                                |
 
 Client code imports through two aliases: `@/` for `src/` and `@shared/` for `shared/`. Code in
 `shared/`, `functions/` and `server/` uses relative imports instead (lint enforces this).

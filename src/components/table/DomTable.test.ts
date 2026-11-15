@@ -202,11 +202,8 @@ describe('the rest of the table', () => {
     const laid = (seat: Seat) =>
       wrapper
         .get(testId(`played-${seat}`))
-        .findAll('li')
-        .map((li) => [
-          li.get('[data-card]').attributes('data-card'),
-          li.classes().includes('dom-table__turned'),
-        ])
+        .findAll('[data-testid="laid-card"]')
+        .map((li) => [li.attributes('data-card'), li.attributes('data-turned') === 'true'])
     expect(laid(0)).toEqual([
       ['7S', true],
       ['8D', true],

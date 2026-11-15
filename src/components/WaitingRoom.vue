@@ -43,16 +43,23 @@ async function share() {
       {{ code }}
     </p>
     <p class="waiting-room__link">
-      or the link <a :href="link">{{ link }}</a>
+      or the link <a :href="link" data-testid="join-link">{{ link }}</a>
     </p>
     <div class="waiting-room__actions">
       <BaseButton v-if="shareable" block size="lg" @click="share">Share</BaseButton>
-      <BaseButton block :variant="shareable ? 'secondary' : 'primary'" @click="copy(code, 'Code')">
+      <BaseButton
+        block
+        :variant="shareable ? 'secondary' : 'primary'"
+        data-testid="copy-code"
+        @click="copy(code, 'Code')"
+      >
         Copy code
       </BaseButton>
-      <BaseButton block variant="secondary" @click="copy(link, 'Link')">Copy link</BaseButton>
+      <BaseButton block variant="secondary" data-testid="copy-link" @click="copy(link, 'Link')">
+        Copy link
+      </BaseButton>
     </div>
-    <p class="waiting-room__status" role="status">
+    <p class="waiting-room__status" role="status" data-testid="waiting-status">
       <span class="waiting-room__dot" aria-hidden="true" /> Waiting for your opponent…
     </p>
   </section>

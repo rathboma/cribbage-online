@@ -38,7 +38,14 @@ export default defineConfigWithVueTs(
     files: ['**/*.{ts,mts,vue}'],
   },
 
-  globalIgnores(['**/dist/**', '**/coverage/**', '**/.wrangler/**', '.claude/**']),
+  globalIgnores([
+    '**/dist/**',
+    '**/coverage/**',
+    '**/.wrangler/**',
+    '.claude/**',
+    'test-results/**',
+    'playwright-report/**',
+  ]),
 
   js.configs.recommended,
   ...pluginVue.configs['flat/essential'],
