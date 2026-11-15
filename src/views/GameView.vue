@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router'
+import AppPage from '@/components/AppPage.vue'
 
 defineProps<{ code: string }>()
 </script>
 
 <template>
-  <main>
+  <AppPage back="/" back-label="Home">
     <h1>Game {{ code }}</h1>
     <p>Placeholder: the game table arrives in P3.5 (#24).</p>
-    <RouterLink to="/">Home</RouterLink>
-  </main>
+  </AppPage>
 </template>
