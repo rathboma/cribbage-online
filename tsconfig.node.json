@@ -6,7 +6,8 @@
     "vitest.config.*",
     "eslint.config.*",
     "playwright.config.*",
-    "server/test/global-setup.ts"
+    "server/test/global-setup.ts",
+    "scripts/**/*.ts"
   ],
   "compilerOptions": {
     "module": "preserve",

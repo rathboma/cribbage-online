@@ -35,6 +35,23 @@ export function randomBot(view: PlayerView, rng: Rng): BotAction | null {
   return options.length ? (options[rng.nextInt(options.length)] as BotAction) : null
 }
 
+/**
+ * Picks the next move from both players' views: each seat that has something to do proposes a
+ * random legal action, and one of them is chosen at random (both may be able to act, e.g. while
+ * discarding). Null when neither seat can act.
+ */
+export function chooseMove(
+  views: Pair<PlayerView>,
+  rng: Rng,
+): { seat: Seat; action: BotAction } | null {
+  const moves: { seat: Seat; action: BotAction }[] = []
+  for (const seat of SEATS) {
+    const action = randomBot(views[seat], rng)
+    if (action) moves.push({ seat, action })
+  }
+  return moves.length ? (moves[rng.nextInt(moves.length)] as (typeof moves)[number]) : null
+}
+
 export interface SimStep {
   before: GameState
   after: GameState
@@ -92,14 +109,8 @@ export function simulateGame(
     if (actionsTaken.length > MAX_SIM_ACTIONS) {
       throw new Error(`seed ${seed}: no result after ${MAX_SIM_ACTIONS} actions`)
     }
-    // Both seats may be able to act (discarding, readying): pick one at random.
-    const moves: { seat: Seat; action: BotAction }[] = []
-    for (const seat of SEATS) {
-      const action = randomBot(playerView(state, seat), rng)
-      if (action) moves.push({ seat, action })
-    }
-    if (moves.length === 0) throw new Error(`seed ${seed}: deadlock in phase ${state.phase}`)
-    const move = moves[rng.nextInt(moves.length)] as (typeof moves)[number]
+    const move = chooseMove([playerView(state, 0), playerView(state, 1)], rng)
+    if (!move) throw new Error(`seed ${seed}: deadlock in phase ${state.phase}`)
     state = apply(state, move.seat, move.action)
   }
   return { finalState: state, events, actionsTaken }
