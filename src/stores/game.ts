@@ -17,7 +17,8 @@ import type {
   ServerEvent,
   ServerEventKind,
 } from '@shared/protocol'
-import { ApiError, createApiClient, type ApiClient } from '@/api/client'
+import { ApiError, type ApiClient } from '@/api/client'
+import { getApi } from '@/api'
 import { loadSession, removeSession } from '@/api/session'
 import {
   isMyMove,
@@ -100,7 +101,7 @@ export const useGameStore = defineStore('game', () => {
       return false
     }
     mySeat.value = session.seat
-    const api = options.api ?? createApiClient()
+    const api = options.api ?? getApi()
     const make =
       options.transport ?? ((a: ApiClient, c: string, t: string) => new PollingTransport(a, c, t))
     transport = make(api, gameCode, session.playerToken)
