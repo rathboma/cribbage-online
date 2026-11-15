@@ -33,6 +33,11 @@ Terms used below:
 | Go | What a player says when they cannot play without passing 31. |
 | Pegging | Scoring points on the board; also the name for the play stage. |
 
+Two words are used in two senses, the way players use them. **Count** is both
+the running total and one sequence of play from 0 up to at most 31 ("the count
+ends", "a new count"). **Hand** is both one deal of the game and the four cards
+a player holds.
+
 ## 2. Card order and values
 
 - **Order (for runs and for cutting):** A, 2, 3, 4, 5, 6, 7, 8, 9, 10, J, Q, K.
@@ -45,10 +50,12 @@ Terms used below:
 
 ## 3. Deal and discard
 
-1. **First dealer:** each player cuts a card; the **lower** card deals (ace is
-   lowest). Equal ranks cut again.
-2. The dealer shuffles and deals **6 cards** to each player, one at a time,
-   starting with the pone.
+1. **First dealer of the first game:** each player cuts a card; the **lower**
+   card deals (ace is lowest). Equal ranks cut again. (For a following game see
+   section 8.)
+2. Every hand starts from the **full 52-card deck, freshly shuffled**. The
+   dealer deals **6 cards** to each player, one at a time, starting with the
+   pone.
 3. Each player chooses **2 cards** and places them face down. These four cards
    are the **crib**. It belongs to the dealer and is not looked at or used until
    the show.
@@ -57,9 +64,9 @@ Terms used below:
 
 ## 4. The starter
 
-1. After both players have discarded, the pone cuts the remaining deck and the
-   dealer turns up the top card of the lower part. This is the **starter**. It
-   stays face up on the deck.
+1. After both players have discarded, the pone cuts the remaining deck (the 40
+   cards that were not dealt) and the dealer turns up the top card of the lower
+   part. This is the **starter**. It stays face up on the deck.
 2. The starter is **not played** during the play. In the show it counts as a
    fifth card for both hands and for the crib.
 3. **His heels:** if the starter is a **jack**, the dealer scores **2 points**
@@ -78,22 +85,25 @@ Terms used below:
    be played.
 5. **A player who can play must play.** A player who holds cards but cannot play
    any of them without passing 31 says **"Go"**.
-6. After a go, the **other player keeps playing** cards, one after another, for
-   as long as they can without passing 31. They score for anything those cards
-   make.
-7. When neither player can play, the count ends:
-   - if the count is exactly **31**, the player who played the last card scores
-     **2**;
-   - otherwise the player who played the last card scores **1** ("one for the
-     go").
+6. After a go, the **other player must keep playing** cards, one after another,
+   for as long as they can without passing 31. They score for anything those
+   cards make. If they cannot play either, they do **not** say "Go" as well:
+   only the first player to be stuck calls it.
+7. When neither player can play, the count ends. **Every count ends with exactly
+   one award, to the player who played its last card:**
+   - **2** if the count is exactly **31**;
+   - otherwise **1**. This point is called "go", or "last card" when it is the
+     final card of the hand. It is one point under two names and is never
+     awarded twice for the same count.
 8. The count **resets to 0**. Cards already played stay out of play. The player
    who did **not** play the last card leads the new count. If that player has no
    cards left, the other player leads.
 9. A player with **no cards left** simply stops; the other player continues
    playing their remaining cards, still resetting at 31 or when they cannot
    play.
-10. The play ends when **all eight cards** have been played. The player who
-    plays the very last card scores **1 for last card** (or 2 if it makes 31).
+10. The play ends when **all eight cards** have been played. The final count
+    ends like any other (step 7): the player of the very last card scores **1
+    for last card**, or 2 if it makes 31.
 
 ### Points scored during the play
 
@@ -108,26 +118,37 @@ score in several ways at once.
 | Pair royal (three of a kind) | 6 | Third card of the same rank in a row. |
 | Double pair royal (four of a kind) | 12 | Fourth card of the same rank in a row. |
 | Run | 1 per card | The last 3 or more cards played, taken in any order, form an unbroken sequence of ranks. Score the longest such run. |
-| Go | 1 | Played the last card of a count that ended below 31. |
-| Last card | 1 | Played the last card of the hand (below 31). |
+| Go / last card | 1 | Played the last card of a count that ended below 31 (step 7). Once per count. |
 
 Details that matter:
 
-- **31 scores 2 in total.** There is no extra point for go or last card on top
-  of the 2 for thirty-one.
-- **Go and last card add to other scores** (other than 31). A last card that
-  also makes fifteen scores 2 + 1 = 3.
-- **Runs do not need to be played in order.** 4, 6, 5 is a run of three for the
-  player of the 5.
-- **A run uses only the most recent cards, with nothing in between.** Look at
-  the last 3 cards, then the last 4, and so on; the longest set that forms a
-  sequence with no repeated rank scores.
+- **Pair, pair royal and double pair royal are alternatives.** A card scores
+  only the largest that applies: 2, 6 or 12 in total, never 2 + 6.
+- **Thirty-one replaces the go or last-card point; it is not added to it.** A
+  count that ends on 31 earns 2 where it would otherwise have earned 1, never 3.
+  Pairs and runs made by the same card still score on top:
+  - 9, 8, 7, 7 → the second 7 scores **4** (pair + thirty-one).
+  - K, 6, 7, 8 → the 8 scores **5** (run of three + thirty-one).
+- **The go / last-card point adds to anything else the card made.** A last card
+  that also makes fifteen scores 2 + 1 = 3.
+- **Runs do not need to be played in order.** 3, 5, 4 is a run of three for the
+  player of the 4.
+- **A run uses only the most recent cards, with nothing in between.** Test every
+  length from 3 up to the number of cards played in the current count, and score
+  the **longest** length whose cards form a sequence with no repeated rank. Do
+  not stop at the first length that fails, or at the first that succeeds.
   - 5, 6, 8, 7 → the 7 scores a run of **4**.
+  - 4, 2, 6, 5, 3 → the 5 scores nothing; the 3 scores a run of **5** (the last
+    3 and the last 4 cards are not runs, but the last 5 are).
+  - 2, 3, A, 4, 5, 6 → the 6 scores a run of **6** (the last 3 cards are a run,
+    but so are all 6).
   - 4, 5, 9, 6 → the 6 scores nothing (the 9 is in the way).
   - 6, 7, 7, 8 → the 8 scores nothing (the repeated 7 breaks the run).
 - **Pairs must be consecutive.** 7, 8, 7 is not a pair.
 - **Nothing carries across a reset.** Pairs and runs only use cards played since
   the count last went back to 0.
+- **A "Go" is not a card.** It does not interrupt a pair or a run; only a reset
+  does.
 - **Your own cards count.** If you play several cards in a row (after a go, or
   because the opponent is out of cards) you can score pairs and runs with them.
 - **Flushes do not score during the play.**
@@ -145,11 +166,11 @@ Pone holds 7♠ 8♦ K♥ 3♣. Dealer holds 8♣ 9♥ Q♦ 2♠.
 | 4 | Dealer | 2♠ | 25 | – | 9♥ and Q♦ would pass 31, so the 2 must be played |
 | 5 | Pone | 3♣ | 28 | – | K♥ would pass 31, so the 3 must be played. 8, 2, 3 is not a run |
 | 6 | Dealer | "Go" | 28 | – | Neither 9♥ nor Q♦ fits |
-| 7 | Pone | cannot play | 28 | Pone 1 | Go: the pone played the last card |
+| 7 | Pone | cannot play either | 28 | Pone 1 | The go point: the pone played the last card of this count. The pone does not say "Go" too |
 | | | | **0** | | Count resets. The dealer did not play the last card, so the dealer leads |
 | 8 | Dealer | 9♥ | 9 | – | |
 | 9 | Pone | K♥ | 19 | – | Pone is now out of cards |
-| 10 | Dealer | Q♦ | 29 | Dealer 1 | Last card. K then Q is not a pair |
+| 10 | Dealer | Q♦ | 29 | Dealer 1 | Last card: the one point for ending the final count. K then Q is not a pair |
 
 Play totals: dealer 3, pone 3.
 
@@ -192,7 +213,7 @@ Details that matter:
 - **Duplicate cards multiply runs.** Each different way of picking the cards is
   a separate run:
 
-  | Pattern | Example | Runs | Pairs | Total (before fifteens) |
+  | Pattern | Example | Run points | Pair points | Total (before fifteens) |
   |---|---|---|---|---|
   | Double run of three | 3-4-4-5 | 2 × 3 = 6 | 2 | 8 |
   | Double run of four | 3-4-5-5-6 | 2 × 4 = 8 | 2 | 10 |
@@ -250,14 +271,17 @@ player**, and a new hand begins at section 3. This repeats until someone wins.
   and crib are never counted.
 - There is no need to hit 121 exactly; extra points are ignored and the score is
   recorded as 121.
-- **Skunk:** the loser finished with **90 or fewer** points (did not reach 91).
-- **Double skunk:** the loser finished with **60 or fewer** points (did not
-  reach 61).
+- **Skunk:** the loser finished on **61 to 90** points (did not reach 91).
+- **Double skunk:** the loser finished on **60 or fewer** points (did not reach
+  61).
+- A game is reported as exactly one of: normal win, skunk, double skunk. The
+  loser's score is taken at the instant the game ends; points in a hand or crib
+  that was never counted do not rescue a skunk.
 - A skunk or double skunk does not change who won. Where a series of games is
   being scored, a skunk traditionally counts as two games and a double skunk as
-  three; this project only reports them.
+  three or four depending on house rule; this project only reports them.
 - If the same two players play again, the **loser of the previous game deals
-  first**.
+  first** (the usual convention; there is no new cut).
 
 ## 9. The board and pegs
 
@@ -267,8 +291,8 @@ player**, and a new hand begins at section 3. This repeats until someone wins.
   number of points just scored. The front peg always shows the current score and
   the rear peg the score before the last points were added.
 - Both pegs start off the track (score 0).
-- Boards mark the skunk line between holes 90 and 91, and often a double-skunk
-  line between 60 and 61.
+- Boards mark the skunk line between holes 90 and 91, and some also mark a
+  double-skunk line between 60 and 61.
 
 ## 10. Checklist of easily missed rules
 
@@ -278,22 +302,33 @@ player**, and a new hand begins at section 3. This repeats until someone wins.
 4. The pone leads the first count of every hand.
 5. A player who can play must play; "go" is only for a player holding cards
    with no legal play. A player with no cards says nothing.
-6. After a go the other player may play several cards in a row.
-7. Thirty-one is 2 points total, never 3.
-8. Go or last card (1) is added to a fifteen, pair or run made by the same card.
-9. Pairs and runs in the play never span a count reset.
-10. In the play, runs are found in the most recent cards only; a repeated rank
-    or an unrelated card in between breaks the run.
-11. After a reset, the player who did not play the last card leads, if they
+6. Only the first player to be stuck says "go". The other player must then keep
+   playing while able, possibly several cards in a row, and never says "go"
+   back.
+7. Each count ends with exactly one award to the player of its last card: 2 for
+   thirty-one, otherwise 1 (go, or last card at the end of the hand). Never
+   both, never 3.
+8. That end-of-count point is added to any fifteen, pair or run made by the
+   same card. A card that makes 31 can also score a pair or a run.
+9. Pair, pair royal and double pair royal are alternatives (2, 6 or 12), not
+   cumulative.
+10. Pairs and runs in the play never span a count reset; a "go" on its own does
+    not break them.
+11. In the play, runs are found in the most recent cards only; a repeated rank
+    or an unrelated card in between breaks the run. Check every length and take
+    the longest.
+12. After a reset, the player who did not play the last card leads, if they
     still have cards.
-12. Flushes never score in the play.
-13. A hand flush is the four hand cards (4), plus the starter for 5. A crib
+13. Flushes never score in the play.
+14. A hand flush is the four hand cards (4), plus the starter for 5. A crib
     flush needs all five.
-14. Nobs is a jack held in hand or crib matching the starter's suit; a jack
+15. Nobs is a jack held in hand or crib matching the starter's suit; a jack
     starter is heels, not nobs.
-15. The show is counted pone, then dealer, then crib; check for a winner after
+16. The show is counted pone, then dealer, then crib; check for a winner after
     every single award.
-16. The crib always belongs to the dealer, and the deal alternates every hand.
+17. The crib always belongs to the dealer, and the deal alternates every hand.
+18. Skunk (loser on 61–90) and double skunk (loser on 60 or fewer) are separate
+    outcomes; report one, using the loser's score when the game ended.
 
 ## 11. What this project leaves out
 
