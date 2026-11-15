@@ -1,0 +1,11 @@
+// Unit tests for the client and shared code (run by Vitest in Node / jsdom).
+{
+  "extends": "./tsconfig.app.json",
+  "include": ["env.d.ts", "src/**/*.test.ts", "shared/**/*.test.ts"],
+  "exclude": [],
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.vitest.tsbuildinfo"
+  }
+}
