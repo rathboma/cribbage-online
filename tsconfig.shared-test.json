@@ -1,0 +1,10 @@
+// Tests for shared/: run by Vitest in Node, so they get Node types but still no DOM.
+{
+  "extends": "./tsconfig.shared.json",
+  "include": ["shared/**/*.test.ts"],
+  "exclude": [],
+  "compilerOptions": {
+    "types": ["node"],
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.shared-test.tsbuildinfo"
+  }
+}

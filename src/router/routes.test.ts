@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { routes } from './index'
+import { routes } from './routes'
 
 function makeRouter() {
   return createRouter({ history: createMemoryHistory(), routes })
@@ -18,7 +18,14 @@ describe('routes', () => {
     expect(makeRouter().resolve(path).name).toBe(name)
   })
 
-  it('passes the code from a join deep link', () => {
-    expect(makeRouter().resolve('/j/bcdfg').params).toEqual({ code: 'bcdfg' })
+  it.each([
+    ['/j/bcd-fg', '/j/BCDFG'],
+    ['/g/bcdfg', '/g/BCDFG'],
+    ['/j/BCDFG', '/j/BCDFG'],
+    ['/j/hello', '/j/hello'],
+  ])('navigating to %s lands on %s', async (from, to) => {
+    const router = makeRouter()
+    await router.push(from)
+    expect(router.currentRoute.value.fullPath).toBe(to)
   })
 })

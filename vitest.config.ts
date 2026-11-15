@@ -3,7 +3,7 @@ import {
   cloudflareTest,
   readD1Migrations,
 } from '@cloudflare/vitest-plugin'
-import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
+import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config.ts'
 import { FUNCTIONS_TEST_BUILD_DIR } from './server/test/global-setup.ts'
 
@@ -26,7 +26,6 @@ export default defineConfig(async () =>
             test: {
               name: 'client',
               include: ['src/**/*.test.ts'],
-              exclude: [...configDefaults.exclude, 'e2e/**'],
               environment: 'jsdom',
             },
           },

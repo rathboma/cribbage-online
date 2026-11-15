@@ -4,12 +4,15 @@ import {
   GAME_CODE_LENGTH,
   isValidGameCode,
   normalizeGameCode,
+  parseGameCode,
 } from './gameCode'
 
 describe('game codes', () => {
   it('uses 20 distinct consonants and no vowels, Y or digits', () => {
+    expect(GAME_CODE_ALPHABET).toHaveLength(20)
     expect(new Set(GAME_CODE_ALPHABET).size).toBe(20)
-    expect(GAME_CODE_ALPHABET).not.toMatch(/[AEIOUY0-9]/)
+    expect(GAME_CODE_ALPHABET).toMatch(/^[A-Z]+$/)
+    expect(GAME_CODE_ALPHABET).not.toMatch(/[AEIOUY]/)
     expect(GAME_CODE_LENGTH).toBe(5)
   })
 
@@ -18,12 +21,22 @@ describe('game codes', () => {
     expect(normalizeGameCode('Bc Df G')).toBe('BCDFG')
   })
 
-  it('accepts valid codes case-insensitively', () => {
+  it('accepts only canonical codes as valid', () => {
     expect(isValidGameCode('BCDFG')).toBe(true)
-    expect(isValidGameCode('zxwvt')).toBe(true)
+    expect(isValidGameCode('ZXWVT')).toBe(true)
+    expect(isValidGameCode('bcdfg')).toBe(false)
+    expect(isValidGameCode(' BCDFG')).toBe(false)
   })
 
-  it.each(['BCDF', 'BCDFGH', 'ABCDF', 'BCDFY', 'BCDF1', '', 'BC FG!'])('rejects %j', (code) => {
-    expect(isValidGameCode(code)).toBe(false)
+  it('parses user input into the canonical code', () => {
+    expect(parseGameCode(' bcd-fg ')).toBe('BCDFG')
+    expect(parseGameCode('zxwvt')).toBe('ZXWVT')
   })
+
+  it.each(['BCDF', 'BCDFGH', 'ABCDF', 'BCDFY', 'BCDF1', '', 'BC FG!', 'HELLO'])(
+    'rejects %j',
+    (input) => {
+      expect(parseGameCode(input)).toBeNull()
+    },
+  )
 })

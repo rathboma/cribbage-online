@@ -15,7 +15,7 @@ describe('JoinView', () => {
   })
 
   it('explains an invalid code', () => {
-    expect(mountWithCode('hello').text()).toContain("doesn't look like a game code")
+    expect(mountWithCode('hello').text()).toContain("isn't a valid game code")
   })
 
   it('shows the join placeholder without a code', () => {

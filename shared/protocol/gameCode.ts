@@ -13,7 +13,16 @@ export function normalizeGameCode(input: string): string {
   return input.replace(/[\s-]+/g, '').toUpperCase()
 }
 
-/** True when `input` is a valid game code once normalized (input is case-insensitive). */
-export function isValidGameCode(input: string): boolean {
-  return GAME_CODE_PATTERN.test(normalizeGameCode(input))
+/** True only for a code already in canonical form, e.g. "BCDFG" (not "bcdfg"). */
+export function isValidGameCode(code: string): boolean {
+  return GAME_CODE_PATTERN.test(code)
+}
+
+/**
+ * Turns user input into a canonical code, or null when it can't be one.
+ * Input is case-insensitive and may contain spaces or dashes.
+ */
+export function parseGameCode(input: string): string | null {
+  const code = normalizeGameCode(input)
+  return isValidGameCode(code) ? code : null
 }

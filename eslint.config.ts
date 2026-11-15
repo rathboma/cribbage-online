@@ -1,8 +1,15 @@
+import js from '@eslint/js'
 import { globalIgnores } from 'eslint/config'
 import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript'
 import pluginVue from 'eslint-plugin-vue'
 import pluginVitest from '@vitest/eslint-plugin'
 import skipFormatting from 'eslint-config-prettier/flat'
+
+/** Wrangler bundles functions/ and everything it imports without the Vite aliases. */
+const noAliasImports = {
+  regex: '^@(shared)?/',
+  message: 'Use a relative import: the @/ and @shared/ aliases only work in the client build.',
+}
 
 export default defineConfigWithVueTs(
   {
@@ -12,6 +19,7 @@ export default defineConfigWithVueTs(
 
   globalIgnores(['**/dist/**', '**/coverage/**', '**/.wrangler/**']),
 
+  js.configs.recommended,
   ...pluginVue.configs['flat/essential'],
   vueTsConfigs.recommended,
 
@@ -21,8 +29,8 @@ export default defineConfigWithVueTs(
   },
 
   {
-    // shared/ runs in the browser and on Cloudflare: keep it free of platform APIs,
-    // and keep the rules engine deterministic (randomness is injected).
+    // shared/ runs in the browser and on Cloudflare: keep it free of platform APIs and
+    // framework code, and keep the rules engine deterministic (randomness is injected).
     name: 'app/shared-is-isomorphic',
     files: ['shared/**/*.ts'],
     rules: {
@@ -40,25 +48,30 @@ export default defineConfigWithVueTs(
           message: 'Inject an Rng instead, so results are reproducible.',
         },
       ],
-    },
-  },
-
-  {
-    // Wrangler bundles functions/ (and what it imports) without the Vite aliases.
-    name: 'app/relative-imports-outside-client',
-    files: ['shared/**/*.ts', 'functions/**/*.ts', 'server/**/*.ts'],
-    rules: {
       'no-restricted-imports': [
         'error',
         {
+          paths: ['vue', 'pinia', 'vue-router', 'three'].map((name) => ({
+            name,
+            message: 'shared/ is used by the server too: no client frameworks.',
+          })),
           patterns: [
+            noAliasImports,
             {
-              regex: '^@(shared)?/',
-              message: 'Use a relative import: aliases only work in the client build.',
+              regex: '^(node|cloudflare):',
+              message: 'shared/ must not depend on a platform API.',
             },
           ],
         },
       ],
+    },
+  },
+
+  {
+    name: 'app/relative-imports-on-server',
+    files: ['functions/**/*.ts', 'server/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [noAliasImports] }],
     },
   },
 
