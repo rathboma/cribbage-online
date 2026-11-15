@@ -1,13 +1,6 @@
 import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 import { parseGameCode } from '@shared/protocol'
-import { loadSession } from '@/api/session'
 import LandingView from '@/views/LandingView.vue'
-
-/** The game screen needs this browser's seat: without a session, offer to join instead. */
-function requireSession(to: RouteLocationNormalized) {
-  const code = String(to.params.code)
-  return loadSession(code) ? true : { name: 'join-code', params: { code } }
-}
 
 /** Rewrites /j/bcd-fg to /j/BCDFG, so every screen sees the canonical code. */
 function canonicalCode(to: RouteLocationNormalized) {
@@ -19,18 +12,8 @@ function canonicalCode(to: RouteLocationNormalized) {
 
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'landing', component: LandingView },
-  {
-    path: '/new',
-    name: 'new-game',
-    component: () => import('@/views/NewGameView.vue'),
-    meta: { title: 'Start a game' },
-  },
-  {
-    path: '/join',
-    name: 'join',
-    component: () => import('@/views/JoinView.vue'),
-    meta: { title: 'Join a game' },
-  },
+  { path: '/new', name: 'new-game', component: () => import('@/views/NewGameView.vue') },
+  { path: '/join', name: 'join', component: () => import('@/views/JoinView.vue') },
   // Deep link shared with the second player: /j/BCDFG
   {
     path: '/j/:code',
@@ -38,15 +21,13 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/JoinView.vue'),
     props: true,
     beforeEnter: canonicalCode,
-    meta: { title: 'Join a game' },
   },
   {
     path: '/g/:code',
     name: 'game',
     component: () => import('@/views/GameView.vue'),
     props: true,
-    beforeEnter: [canonicalCode, requireSession],
-    meta: { title: (route: RouteLocationNormalized) => `Game ${String(route.params.code)}` },
+    beforeEnter: canonicalCode,
   },
   // Client-side "not found". There is deliberately no static 404.html in the build:
   // Cloudflare Pages only falls back to index.html for deep links when none exists.
@@ -54,6 +35,5 @@ export const routes: RouteRecordRaw[] = [
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
-    meta: { title: 'Page not found' },
   },
 ]

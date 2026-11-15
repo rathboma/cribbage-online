@@ -1,103 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { parsePlayerName, PLAYER_NAME_MAX_LENGTH } from '@shared/protocol'
-import { getApi, setStartCursor } from '@/api'
-import { friendlyError } from '@/api/messages'
-import { loadLastName, saveLastName, saveSession } from '@/api/session'
-import AppPage from '@/components/AppPage.vue'
-import BaseBadge from '@/components/base/BaseBadge.vue'
-import BaseButton from '@/components/base/BaseButton.vue'
-import TextInput from '@/components/base/TextInput.vue'
-import ToggleSwitch from '@/components/base/ToggleSwitch.vue'
-
-const router = useRouter()
-
-const chatOn = ref(true)
-const videoOn = ref(false)
-const name = ref(loadLastName())
-const submitted = ref(false)
-const busy = ref(false)
-const error = ref<string | null>(null)
-
-const nameError = computed(() =>
-  submitted.value && parsePlayerName(name.value) === null
-    ? `Enter a name of 1 to ${PLAYER_NAME_MAX_LENGTH} characters.`
-    : null,
-)
-
-async function start() {
-  submitted.value = true
-  error.value = null
-  const playerName = parsePlayerName(name.value)
-  if (playerName === null || busy.value) return
-  busy.value = true
-  try {
-    const res = await getApi().createGame({
-      name: playerName,
-      chatOn: chatOn.value,
-      videoOn: videoOn.value,
-    })
-    saveSession(res.code, { playerToken: res.playerToken, seat: res.seat, name: playerName })
-    saveLastName(playerName)
-    setStartCursor(res.code, res.cursor)
-    await router.push({ name: 'game', params: { code: res.code } })
-  } catch (err) {
-    error.value = friendlyError(err)
-  } finally {
-    busy.value = false
-  }
-}
+import { RouterLink } from 'vue-router'
 </script>
 
 <template>
-  <AppPage back="/">
-    <h1 class="new-game__title">Start a game</h1>
-    <form class="new-game" novalidate @submit.prevent="start">
-      <fieldset class="new-game__options">
-        <legend class="visually-hidden">Options</legend>
-        <ToggleSwitch v-model="chatOn" label="Chat" description="Send messages during the game." />
-        <ToggleSwitch
-          v-model="videoOn"
-          label="Video"
-          description="Connects directly between the two players."
-        >
-          <template #badge><BaseBadge>Beta</BaseBadge></template>
-        </ToggleSwitch>
-      </fieldset>
-      <TextInput
-        v-model="name"
-        label="Your name"
-        :error="nameError"
-        :maxlength="PLAYER_NAME_MAX_LENGTH * 2"
-        autocomplete="nickname"
-        autocapitalize="words"
-        enterkeyhint="go"
-      />
-      <p v-if="error" class="new-game__error" role="alert">{{ error }}</p>
-      <BaseButton type="submit" size="lg" block :loading="busy">Start</BaseButton>
-    </form>
-  </AppPage>
+  <main>
+    <h1>Start a game</h1>
+    <p>Placeholder: the start-game flow arrives in P3.3 (#22).</p>
+    <RouterLink to="/">Back</RouterLink>
+  </main>
 </template>
-
-<style scoped>
-.new-game__title {
-  margin-top: 0;
-}
-.new-game {
-  display: grid;
-  gap: var(--space-5);
-}
-.new-game__options {
-  display: grid;
-  gap: var(--space-4);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-.new-game__error {
-  margin: 0;
-  color: var(--color-danger);
-  font-weight: 600;
-}
-</style>

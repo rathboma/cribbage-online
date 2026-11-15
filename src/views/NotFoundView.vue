@@ -1,14 +1,11 @@
 <script setup lang="ts">
-import AppPage from '@/components/AppPage.vue'
-import BaseButton from '@/components/base/BaseButton.vue'
+import { RouterLink } from 'vue-router'
 </script>
 
 <template>
-  <AppPage>
+  <main>
     <h1>Page not found</h1>
-    <p>
-      There's nothing at this address. If someone sent you a game link, check it was copied in full.
-    </p>
-    <BaseButton to="/" block>Go to the start page</BaseButton>
-  </AppPage>
+    <p>There's nothing here.</p>
+    <RouterLink to="/">Go to the start page</RouterLink>
+  </main>
 </template>
