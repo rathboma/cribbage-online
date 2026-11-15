@@ -5,7 +5,7 @@
  */
 import { applyAction } from '../../../../shared/engine'
 import { actionRequestSchema } from '../../../../shared/protocol/schemas'
-import { requirePlayer, requireTokenHash } from '../../../../server/auth/session'
+import { authenticate } from '../../../../server/auth/session'
 import { saveState } from '../../../../server/db'
 import type { Env } from '../../../../server/env'
 import { ENGINE_ERROR_MESSAGES } from '../../../../server/errors'
@@ -20,12 +20,10 @@ const ATTEMPTS = 3
 export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }) => {
   const code = codeFromParam(params.code)
   const body = await readBody(request, actionRequestSchema)
-  const tokenHash = await requireTokenHash(request)
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const now = Date.now()
-    const snapshot = await readLiveGame(env.DB, code, now, { tokenHash })
-    const player = requirePlayer(snapshot.players, tokenHash)
+    const { snapshot, player } = await authenticate(env.DB, request, code, now)
     const { game } = snapshot
 
     if (game.status === 'abandoned') {
@@ -61,15 +59,15 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
       if (!saved.ok) continue
     }
 
-    await notePresence(env.DB, player, now)
     const after = await readLiveGame(
       env.DB,
       code,
       now,
-      { tokenHash },
+      { seat: player.seat },
       body.cursor,
       SYNC_EVENT_LIMIT,
     )
+    await notePresence(env.DB, player, after.game.status, now)
     return json(buildSyncResponse(after, player.seat, { cursor: body.cursor, v: body.v }, now))
   }
   throw new HttpError(409, 'conflict', 'The game kept changing. Please try again.')

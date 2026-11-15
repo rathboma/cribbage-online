@@ -62,14 +62,17 @@ export interface SyncQuery {
 
 /**
  * One *step*: new events plus the view that results from them, read as one consistent snapshot.
+ * Events are delivered once across *sequential* syncs; a client must not run two syncs (or a
+ * sync and an action) from the same cursor at once, or must drop events it has already seen.
  */
 export interface SyncResponse {
   status: GameStatus
   /**
-   * The game's current state version. Once a response includes `view`, send this back as `v`
-   * so the next sync can leave the view out if nothing changed.
+   * The game's state version, which the client sends back as `v` so the next sync can leave the
+   * view out if nothing changed. Absent while `more` is true, so copying it from a truncated
+   * page can't suppress the view on the final one.
    */
-  version: number
+  version?: number
   /**
    * The state after every event in the game so far. Omitted when the caller's `v` is already
    * current, and while `more` is true: a truncated page's events are older than the current
@@ -80,7 +83,10 @@ export interface SyncResponse {
   events: ServerEvent[]
   /** Id of the last event included in this response (the client sends it back next time). */
   cursor: number
-  /** True when the event list was truncated: sync again straight away. */
+  /**
+   * True when the event list was truncated: sync again straight away. `status` and `players`
+   * are already current on a truncated page; handle the remaining pages before reacting to them.
+   */
   more: boolean
   players: PlayerInfo[]
   /** Server clock, epoch milliseconds. */

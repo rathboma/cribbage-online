@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers'
+import { env, exports } from 'cloudflare:workers'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyAction, type CardId } from '../../shared/engine'
 import type {
@@ -108,7 +108,10 @@ describe('GET /api/games/:code/sync', () => {
       expect(gameEventTypes(res.body.events)).toContain('cut_for_deal')
       // ...but it does contain their own hand.
       for (const card of state.hands[seat]) expect(res.text).toContain(`"${card}"`)
-      expect(res.text).not.toContain('tokenHash')
+      // No token or token hash of either player, under any name.
+      for (const p of await listPlayers(env.DB, g.code)) expect(res.text).not.toContain(p.tokenHash)
+      expect(res.text).not.toContain(g.host.token)
+      expect(res.text).not.toContain(g.guest.token)
     }
   })
 
@@ -126,7 +129,7 @@ describe('GET /api/games/:code/sync', () => {
     const first = await sync(g.code, g.host.token, { cursor: 0 })
     const again = await sync(g.code, g.host.token, {
       cursor: first.body.cursor,
-      v: first.body.version,
+      v: first.body.version!,
     })
     expect(again.body.view).toBeUndefined()
     expect(again.body.events).toEqual([])
@@ -145,10 +148,10 @@ describe('GET /api/games/:code/sync', () => {
 
     const second = await sync(g.code, g.host.token, {
       cursor: first.body.cursor,
-      v: first.body.version,
+      v: first.body.version!,
     })
     expect(gameEventTypes(second.body.events)).toEqual(['discarded'])
-    expect(second.body.version).toBe(first.body.version + 1)
+    expect(second.body.version).toBe(first.body.version! + 1)
     expect(second.body.view?.hasDiscarded).toEqual([false, true])
     expect(second.body.view?.cribCount).toBe(2)
   })
@@ -188,6 +191,66 @@ describe('GET /api/games/:code/sync', () => {
     expect(seen).toHaveLength(total + 1) // the opening deal plus every chat message
     expect(new Set(seen).size).toBe(seen.length)
     expect(seen).toEqual([...seen].sort((a, b) => a - b))
+  })
+
+  it('still delivers the final view to a client that copies version from every page', async () => {
+    const g = await createAndJoin()
+    for (let i = 0; i < SYNC_EVENT_LIMIT + 5; i++) {
+      await appendEvent(env.DB, g.code, { kind: 'chat', fromSeat: 0, payload: { i } }, Date.now())
+    }
+    let cursor = g.guest.cursor
+    let v: number | undefined
+    let view = false
+    for (let more = true, pages = 0; more && pages < 5; pages++) {
+      const res = await sync(g.code, g.guest.token, { cursor, ...(v === undefined ? {} : { v }) })
+      cursor = res.body.cursor
+      v = res.body.version // naive client code: copy it whatever the page
+      view = res.body.view !== undefined
+      more = res.body.more
+    }
+    expect(view).toBe(true)
+  })
+
+  it('sends exactly a full page of new events as one page', async () => {
+    const g = await createAndJoin()
+    const start = (await sync(g.code, g.host.token)).body.cursor
+    for (let i = 0; i < SYNC_EVENT_LIMIT; i++) {
+      await appendEvent(env.DB, g.code, { kind: 'chat', fromSeat: 1, payload: { i } }, Date.now())
+    }
+    const res = await sync(g.code, g.host.token, { cursor: start })
+    expect(res.body.events).toHaveLength(SYNC_EVENT_LIMIT)
+    expect(res.body.more).toBe(false)
+    expect(res.body.view).toBeDefined()
+  })
+
+  it('moves the cursor past events addressed only to the other seat', async () => {
+    const g = await createAndJoin()
+    const start = (await sync(g.code, g.host.token)).body.cursor
+    let last = 0
+    for (let i = 0; i < 3; i++) {
+      last = (await appendEvent(
+        env.DB,
+        g.code,
+        { kind: 'signal', fromSeat: 0, toSeat: 1, payload: { i } },
+        Date.now(),
+      )) as number
+    }
+    const res = await sync(g.code, g.host.token, { cursor: start })
+    expect(res.body.events).toEqual([])
+    expect(res.body.cursor).toBe(last)
+    // ...while the guest still receives them.
+    expect((await sync(g.code, g.guest.token, { cursor: start })).body.events).toHaveLength(3)
+  })
+
+  it('snaps a cursor from beyond the end of the log back to the present', async () => {
+    const g = await createAndJoin()
+    const latest = (await sync(g.code, g.host.token)).body.cursor
+    const lost = await sync(g.code, g.host.token, { cursor: latest + 1_000_000 })
+    expect(lost.body.cursor).toBe(latest)
+    expect(lost.body.view).toBeDefined()
+    const id = await appendEvent(env.DB, g.code, { kind: 'chat', payload: {} }, Date.now())
+    const next = await sync(g.code, g.host.token, { cursor: lost.body.cursor })
+    expect(next.body.events.map((e) => e.id)).toEqual([id])
   })
 
   it('never delivers an event addressed to one seat to the other', async () => {
@@ -298,11 +361,16 @@ describe('errors', () => {
     expect(res.status).toBe(401)
   })
 
-  it('answers 401 for a malformed Authorization header', async () => {
-    const g = await createAndJoin()
-    const res = await api<ApiError>('GET', `/api/games/${g.code}/sync`)
-    expect(res.status).toBe(401)
-  })
+  it.each(['Basic abc', 'Bearer', 'Bearer a b', 'token-without-scheme'])(
+    'answers 401 for the Authorization header %j',
+    async (header) => {
+      const g = await createAndJoin()
+      const res = await exports.default.fetch(`http://localhost/api/games/${g.code}/sync`, {
+        headers: { Authorization: header },
+      })
+      expect(res.status).toBe(401)
+    },
+  )
 
   it('answers 404 for an unknown or expired game', async () => {
     const g = await createAndJoin()

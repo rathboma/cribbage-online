@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createGame, type GameEvent } from '../../shared/engine'
 import type { Seat } from '../../shared/protocol'
 import { generateToken, hashToken } from '../auth/tokens'
@@ -420,6 +420,15 @@ describe('readSync', () => {
 
   it('returns null for an unknown game', async () => {
     expect(await readSync(db, 'QQQQQ', { seat: 0 }, 0, 10)).toBeNull()
+  })
+
+  it('makes exactly one round trip: a single batch, nothing else', async () => {
+    const code = await newGame()
+    const batch = vi.fn((statements: D1PreparedStatement[]) => db.batch(statements))
+    const counting = { batch, prepare: (sql: string) => db.prepare(sql) } as unknown as D1Database
+    const host = (await listPlayers(db, code))[0]!
+    expect(await readSync(counting, code, { tokenHash: host.tokenHash }, 0, 10)).not.toBeNull()
+    expect(batch).toHaveBeenCalledTimes(1)
   })
 })
 
