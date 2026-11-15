@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { CardId } from '@shared/protocol'
 import { friendlyError } from '@/api/messages'
@@ -11,9 +11,10 @@ import { useToasts } from '@/stores/toasts'
 
 /**
  * A game in progress: the HUD around a table. This is the only place that connects them to
- * the store. Both are handed `presentedView` (never `view`), so what is on screen can wait for
- * animations; every move goes out through the store's actions; a move the server refuses
- * becomes a toast. The table is the simple DOM one; the 3D table takes its place in Phase 4.
+ * the store. Both are handed what is on screen (`presentedView`, `presentedStatus`), never the
+ * server's latest, so they can wait for animations; every move goes out through the store's
+ * actions; a move the server refuses becomes a toast. The table is the simple DOM one; the 3D
+ * table takes its place in Phase 4.
  */
 defineProps<{ code: string }>()
 
@@ -21,6 +22,7 @@ const game = useGameStore()
 const toasts = useToasts()
 
 const view = computed(() => game.presentedView)
+const status = computed(() => game.presentedStatus ?? game.status)
 const seats = computed(() =>
   view.value ? seatsFor(view.value.seat, game.players) : seatsFor(0, []),
 )
@@ -36,12 +38,27 @@ watch(
 )
 
 async function act(move: () => Promise<void>) {
-  if (game.sending) return
+  // One move at a time, and none while the screen is still catching up with the server.
+  if (game.busy) return
   try {
     await move()
   } catch (err) {
     toasts.push(friendlyError(err), { kind: 'error' })
   }
+}
+
+// When a card leaves the hand the others close up, so a second tap in the same place (or a
+// second Enter: focus moves to the next card) would hit a different card. Right after the
+// hand changes, a play is far more likely a double tap than a decision, so it is ignored.
+const PLAY_PAUSE_MS = 400
+let handChangedAt = 0
+watch(
+  () => view.value?.myHand.length,
+  () => (handChangedAt = Date.now()),
+)
+function play(card: CardId) {
+  if (Date.now() - handChangedAt < PLAY_PAUSE_MS) return
+  void act(() => game.play(card))
 }
 
 function discard() {
@@ -54,22 +71,10 @@ function discard() {
 const tableVisible = computed(
   () => view.value?.phase !== 'show' && view.value?.phase !== 'game_over',
 )
-
-// Any tap or key press means the player is here: if polling had slowed down (nothing
-// happening for a while), go back to the active rate.
-const onActivity = () => game.nudge()
-onMounted(() => {
-  window.addEventListener('pointerdown', onActivity, { passive: true })
-  window.addEventListener('keydown', onActivity)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', onActivity)
-  window.removeEventListener('keydown', onActivity)
-})
 </script>
 
 <template>
-  <main v-if="view && game.status" class="game-screen">
+  <main v-if="view && status" class="game-screen">
     <header class="game-screen__bar on-dark">
       <RouterLink to="/" class="game-screen__home">
         <span aria-hidden="true">←</span> Home
@@ -78,11 +83,11 @@ onBeforeUnmount(() => {
     </header>
     <GameHud
       :view="view"
-      :status="game.status"
+      :status="status"
       :seats="seats"
       :events="game.handEvents"
       :selected="picked"
-      :busy="game.sending"
+      :busy="game.busy"
       @discard="discard"
       @cut="act(game.cut)"
       @go="act(game.go)"
@@ -93,8 +98,8 @@ onBeforeUnmount(() => {
           v-model:selected="selected"
           :view="view"
           :seats="seats"
-          :busy="game.sending"
-          @play="(card) => act(() => game.play(card))"
+          :busy="game.busy"
+          @play="play"
         />
       </template>
     </GameHud>

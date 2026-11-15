@@ -123,6 +123,30 @@ describe('your hand', () => {
     expect(handCards(wrapper).every((c) => c.classes().includes('hand-card--blocked'))).toBe(true)
   })
 
+  it('shows cards that cannot be used now as flat and dimmed, each kind its own way', () => {
+    // Not this player's turn: readable, but plainly not in play.
+    const waiting = mountTable(playerView(workedExample(), 1))
+    expect(handCards(waiting).map((c) => c.classes().filter((k) => k !== 'hand-card'))).toEqual(
+      Array(4).fill(['hand-card--idle']),
+    )
+    // This player's turn: what can be played stands out from what can't.
+    const state = playMoves(workedExample(), WORKED_EXAMPLE_MOVES.slice(0, 4)).state
+    const onTurn = mountTable(playerView(state, 0))
+    expect(card(onTurn, '3C').classes()).toContain('hand-card--usable')
+    expect(card(onTurn, 'KH').classes()).toContain('hand-card--blocked')
+  })
+
+  it('does not play card after card when Enter is held down', () => {
+    const wrapper = mountTable(playerView(workedExample(), 0))
+    const first = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true })
+    const held = new KeyboardEvent('keydown', { key: 'Enter', repeat: true, cancelable: true })
+    handCards(wrapper)[0]!.element.dispatchEvent(first)
+    handCards(wrapper)[0]!.element.dispatchEvent(held)
+    // The browser turns an Enter keydown into a click unless it was cancelled.
+    expect(first.defaultPrevented).toBe(false)
+    expect(held.defaultPrevented).toBe(true)
+  })
+
   it('takes no clicks while a move is on its way', async () => {
     const wrapper = mountTable(playerView(workedExample(), 0), { busy: true })
     expect(usable(wrapper)).toEqual([])

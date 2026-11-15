@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount, RouterLinkStub } from '@vue/test-utils'
 import { h } from 'vue'
 import type { GameState } from '@shared/engine'
@@ -106,10 +106,46 @@ describe('what just happened', () => {
     ])
   })
 
-  it('makes way for the show panel once the hand is counted', () => {
+  it('keeps the move that ended the play in view while the hands are counted', () => {
+    // Otherwise the last card, and the point it scored, would never be seen: the screen goes
+    // straight from the play to the show.
     const { state, events } = playMoves(workedExample(), WORKED_EXAMPLE_MOVES)
     expect(state.phase).toBe('show')
-    expect(mountHud(playerView(state, 0), { events }).find(testId('feed')).exists()).toBe(false)
+    const feed = mountHud(playerView(state, 0), { events }).get(testId('feed'))
+    expect(feed.findAll('li').map((li) => li.text())).toEqual([
+      `Sam played ${cardText('QD')} — count 29. Last card for 1.`,
+    ])
+  })
+
+  it('keeps the move that won the game in view beside the result', () => {
+    const before = workedExample()
+    before.scores = [100, 119]
+    before.previousScores = [100, 119]
+    // The dealer needs two: the fifteen made by the second card is enough.
+    const { state, events } = playMoves(before, WORKED_EXAMPLE_MOVES.slice(0, 2))
+    expect(state.phase).toBe('game_over')
+    const wrapper = mountHud(playerView(state, 0, { canAct: false }), {
+      events,
+      status: 'finished',
+    })
+    expect(wrapper.get(testId('winner')).text()).toBe('Sam won')
+    expect(
+      wrapper
+        .get(testId('feed'))
+        .findAll('li')
+        .map((li) => li.text()),
+    ).toEqual([`Sam played ${cardText('8C')} — count 15. Fifteen for 2.`])
+  })
+
+  it('is on the page before anything has happened, so a screen reader hears the first line', async () => {
+    const wrapper = mountHud(playerView(workedExample(), 0))
+    const feed = wrapper.get(testId('feed'))
+    expect(feed.attributes('role')).toBe('log')
+    expect(feed.findAll('li')).toHaveLength(0)
+    const { events } = playMoves(workedExample(), WORKED_EXAMPLE_MOVES.slice(0, 1))
+    await wrapper.setProps({ events })
+    expect(wrapper.get(testId('feed')).element).toBe(feed.element)
+    expect(feed.findAll('li')).toHaveLength(1)
   })
 })
 
@@ -168,6 +204,40 @@ describe('action buttons', () => {
     const waiting = stateWhen((s) => s.phase === 'show' && s.ready[0] && !s.ready[1])
     expect(mountHud(playerView(waiting, 0)).find(testId('action-ready')).exists()).toBe(false)
     expect(mountHud(playerView(waiting, 1)).find(testId('action-ready')).exists()).toBe(true)
+  })
+
+  it('moves keyboard focus to the prompt when the button that was pressed goes away', async () => {
+    const shown = stateWhen((s) => s.phase === 'show')
+    const wrapper = mount(GameHud, {
+      props: {
+        view: playerView(shown, 0),
+        status: 'active',
+        seats: seats(0),
+        events: [],
+        selected: [],
+        busy: false,
+      },
+      attachTo: document.body,
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    const button = wrapper.get(testId('action-ready'))
+    ;(button.element as HTMLElement).focus()
+    expect(document.activeElement).toBe(button.element)
+
+    // Next hand was pressed: this player is ready, the button is gone.
+    const ready = playMoves(shown, [{ seat: 0, action: { type: 'ready' } }]).state
+    await wrapper.setProps({ view: playerView(ready, 0) })
+    expect(wrapper.find(testId('action-ready')).exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get(testId('prompt')).element)
+    wrapper.unmount()
+  })
+
+  it('leaves focus where it is when it was not on a button of the tray', async () => {
+    const shown = stateWhen((s) => s.phase === 'show')
+    const wrapper = mountHud(playerView(shown, 0))
+    const ready = playMoves(shown, [{ seat: 0, action: { type: 'ready' } }]).state
+    await wrapper.setProps({ view: playerView(ready, 0) })
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('ignores clicks while a move is on its way', async () => {
@@ -240,6 +310,35 @@ describe('the show', () => {
     const wrapper = mountHud(playerView(workedExample(), 0))
     expect(wrapper.find(testId('show-panel')).exists()).toBe(false)
     expect(wrapper.find(testId('the-table')).exists()).toBe(true)
+  })
+})
+
+describe('a show too long for the screen', () => {
+  it('says there is more below and scrolls on when asked, until the end is in view', async () => {
+    const state = playMoves(workedExample(), WORKED_EXAMPLE_MOVES).state
+    const wrapper = mountHud(playerView(state, 0))
+    expect(wrapper.find(testId('more-below')).exists()).toBe(false)
+
+    // jsdom lays nothing out: give the panel a size that needs scrolling.
+    const panels = wrapper.get('.game-hud__panels').element as HTMLElement
+    const size = { scrollHeight: 900, clientHeight: 300 }
+    Object.defineProperties(panels, {
+      scrollHeight: { get: () => size.scrollHeight },
+      clientHeight: { get: () => size.clientHeight },
+    })
+    const scrollBy = vi.fn()
+    panels.scrollBy = scrollBy as unknown as typeof panels.scrollBy
+    await wrapper.get('.game-hud__panels').trigger('scroll')
+
+    const more = wrapper.get(testId('more-below'))
+    expect(more.element.tagName).toBe('BUTTON')
+    await more.trigger('click')
+    expect(scrollBy).toHaveBeenCalledWith(expect.objectContaining({ top: 240 }))
+
+    // Scrolled to the end: nothing more to announce.
+    panels.scrollTop = 600
+    await wrapper.get('.game-hud__panels').trigger('scroll')
+    expect(wrapper.find(testId('more-below')).exists()).toBe(false)
   })
 })
 

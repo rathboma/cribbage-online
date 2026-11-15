@@ -71,6 +71,7 @@ const offered = computed(
 <style scoped>
 .action-bar {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
 }
 @media (max-height: 620px) {

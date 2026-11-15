@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import type { CardId, GameEvent, GameStatus, PlayerView } from '@shared/protocol'
 import { narrate } from '@/game/narrate'
 import { promptFor, seatsToAct } from '@/game/prompt'
@@ -36,6 +36,52 @@ const lines = computed(() => narrate(props.events, props.seats))
 const count = computed(() => (props.view.phase === 'play' ? props.view.count : null))
 const over = computed(() => props.view.phase === 'game_over')
 const counted = computed(() => props.view.show.length > 0)
+// During the play the last two moves; once the panels have the screen, only the move that
+// ended the play (or won the game), which the panels don't show.
+const feedLines = computed(() => (props.view.phase === 'show' || over.value ? 1 : 2))
+
+// On a small phone the three counted hands don't fit: the crib is below the fold. Say so
+// while there is more to see, with a button that scrolls on.
+const panels = useTemplateRef<HTMLElement>('panels')
+const moreBelow = ref(false)
+function measure() {
+  const el = panels.value
+  moreBelow.value = !!el && el.scrollHeight - el.scrollTop - el.clientHeight > 8
+}
+function scrollOn() {
+  const el = panels.value
+  if (!el) return
+  const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  el.scrollBy({ top: el.clientHeight * 0.8, behavior: calm ? 'auto' : 'smooth' })
+}
+watch(() => [panels.value, props.view] as const, measure, { flush: 'post' })
+onMounted(() => window.addEventListener('resize', measure))
+onBeforeUnmount(() => window.removeEventListener('resize', measure))
+
+// Send to crib, Cut, Go and Next hand disappear once pressed. Keyboard focus would fall back
+// to the top of the page; put it on the prompt instead, which says what happens next and
+// sits just before the next button to appear.
+const tray = useTemplateRef<HTMLElement>('tray')
+const promptLine = useTemplateRef<InstanceType<typeof PromptLine>>('promptLine')
+let focusWasOnButton = false
+watch(
+  () => props.view,
+  () => {
+    const active = document.activeElement
+    focusWasOnButton = active instanceof HTMLButtonElement && !!tray.value?.contains(active)
+  },
+  { flush: 'pre' },
+)
+watch(
+  () => props.view,
+  () => {
+    if (!focusWasOnButton) return
+    const active = document.activeElement
+    if (active && active !== document.body && active.isConnected) return
+    promptLine.value?.focus()
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -49,10 +95,12 @@ const counted = computed(() => props.view.show.length > 0)
       <!-- Focusable so the keyboard can scroll a long count on a small screen. -->
       <div
         v-if="over || counted"
+        ref="panels"
         class="game-hud__panels"
         tabindex="0"
         role="group"
         :aria-label="over ? 'Result' : 'The show'"
+        @scroll.passive="measure"
       >
         <GameOverPanel
           v-if="over && view.winner !== null"
@@ -62,13 +110,23 @@ const counted = computed(() => props.view.show.length > 0)
           :seats="seats"
         />
         <ShowPanel v-if="counted" :show="view.show" :starter="view.starter" :seats="seats" />
+        <button
+          v-if="moreBelow"
+          type="button"
+          class="game-hud__more"
+          data-testid="more-below"
+          @click="scrollOn"
+        >
+          More below <span aria-hidden="true">↓</span>
+        </button>
       </div>
     </div>
 
-    <div class="game-hud__tray">
-      <PromptLine :prompt="prompt" :count="count" />
-      <!-- Once the hand is being counted the show panel does the explaining. -->
-      <EventFeed v-if="lines.length > 0 && view.phase !== 'show' && !over" :lines="lines" />
+    <div ref="tray" class="game-hud__tray">
+      <div class="game-hud__says">
+        <PromptLine ref="promptLine" :prompt="prompt" :count="count" />
+        <EventFeed :lines="lines" :max="feedLines" />
+      </div>
       <ActionBar
         :legal="view.legal"
         :selected-count="selected.length"
@@ -90,6 +148,7 @@ const counted = computed(() => props.view.show.length > 0)
   flex: 1;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
   min-height: 0;
 }
 .game-hud__main {
@@ -99,31 +158,61 @@ const counted = computed(() => props.view.show.length > 0)
   gap: var(--space-2);
   min-height: 0;
 }
+/* A table in the slot keeps close to half of the room even when the show or the result is
+   long (they scroll): the 3D table stays in view while the hands are counted. Without panels
+   it grows to fill everything. */
 .game-hud__table {
   display: flex;
-  flex: 1 1 0;
+  flex: 1 0 45%;
   flex-direction: column;
   min-height: 0;
 }
-/* The show and the result scroll inside their own space when they are long. */
+/* The show and the result scroll inside their own space when they are long. Positioned, so
+   visually hidden text inside scrolls with them instead of stretching the page. */
 .game-hud__panels {
+  position: relative;
   display: grid;
   flex: 0 1 auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   align-content: start;
   min-height: 0;
   overflow-y: auto;
   border-radius: var(--radius-lg);
 }
+/* Floats at the bottom edge of the panels while part of them is out of sight. */
+.game-hud__more {
+  position: sticky;
+  bottom: var(--space-2);
+  justify-self: center;
+  min-height: 2.25rem;
+  margin-top: calc(-2.25rem - var(--space-2));
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-ink);
+  color: var(--color-cream);
+  box-shadow: var(--shadow-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
 .game-hud__tray {
   display: grid;
   flex: none;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-lg);
   background: var(--color-cream);
   color: var(--color-ink);
   box-shadow: var(--shadow-md);
+}
+.game-hud__says {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
 }
 /* Short screens (a small phone with the browser's bars showing): give the table the room. */
 @media (max-height: 620px) {

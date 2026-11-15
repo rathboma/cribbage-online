@@ -133,6 +133,10 @@ export default defineConfigWithVueTs(
               regex: '(^|/)(table|three)(/|$)',
               message: 'The HUD must not import from a table. Wire them together in GameScreen.',
             },
+            {
+              regex: '(^|/)stores(/|$)',
+              message: 'The HUD is given what is on screen as props. GameScreen reads the store.',
+            },
           ],
         },
       ],
@@ -152,6 +156,10 @@ export default defineConfigWithVueTs(
             {
               regex: '(^|/)hud(/|$)',
               message: 'A table must not import from the HUD. Wire them together in GameScreen.',
+            },
+            {
+              regex: '(^|/)stores(/|$)',
+              message: 'A table is given what is on screen as props. GameScreen reads the store.',
             },
           ],
         },

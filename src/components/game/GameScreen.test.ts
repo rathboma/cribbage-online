@@ -6,7 +6,7 @@ import type { GameState } from '@shared/engine'
 import type { CardId, GameStatus, Seat, SyncResponse } from '@shared/protocol'
 import { useApiClient } from '@/api'
 import { ApiError, type ApiClient } from '@/api/client'
-import { saveSession } from '@/api/session'
+import { loadSession, saveSession } from '@/api/session'
 import App from '@/App.vue'
 import { routes } from '@/router/routes'
 import { useGameStore } from '@/stores/game'
@@ -194,18 +194,83 @@ describe('game screen', () => {
     expect(wrapper.get(testId('back-home')).attributes('href')).toBe('/')
   })
 
-  it('forgets the picked cards when a new hand is dealt', async () => {
+  it('forgets the picked cards when a new hand is dealt, even if the same cards come back', async () => {
     const first = stateWhen((s) => s.phase === 'discard')
     const wrapper = await open(first)
-    await wrapper.findAll(testId('hand-card'))[0]?.trigger('click')
-    expect(wrapper.get(testId('action-discard')).text()).toContain('1 of 2')
+    const cards = wrapper.findAll(testId('hand-card'))
+    await cards[0]?.trigger('click')
+    await cards[1]?.trigger('click')
+    expect(wrapper.findAll(`${testId('hand-card')}[aria-pressed="true"]`)).toHaveLength(2)
 
-    const second = stateWhen((s) => s.phase === 'discard' && s.hand === 2)
-    sync.mockResolvedValue(response(second, 0))
+    // The next hand happens to deal the very same cards.
+    sync.mockResolvedValue(response({ ...first, hand: first.hand + 1 }, 0))
     await vi.advanceTimersByTimeAsync(3000)
-    expect(wrapper.get(testId('game')).attributes('data-hand')).toBe('2')
-    expect(wrapper.get(testId('action-discard')).text()).toContain('0 of 2')
+    expect(wrapper.get(testId('game')).attributes('data-hand')).toBe(String(first.hand + 1))
     expect(wrapper.findAll(`${testId('hand-card')}[aria-pressed="true"]`)).toHaveLength(0)
+    expect(wrapper.get(testId('action-discard')).text()).toContain('0 of 2')
+    // Every card can be picked: none is blocked by a selection left over from the last hand.
+    expect(
+      wrapper.findAll(testId('hand-card')).filter((c) => c.attributes('aria-disabled') === 'true'),
+    ).toHaveLength(0)
+  })
+
+  it('ignores a second tap that lands on the next card just after one was played', async () => {
+    // The opponent is out of cards, so this player keeps the turn after each card.
+    const before = workedExample()
+    before.play.played[1] = [...before.hands[1]]
+    before.hands[1] = []
+    const wrapper = await open(before)
+    const after = playMoves(before, [{ seat: 0, action: { type: 'play', card: '3C' } }]).state
+    act.mockResolvedValue(response(after, 0))
+
+    await handCard(wrapper, '3C').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll(testId('hand-card'))).toHaveLength(3)
+    expect(handCard(wrapper, '7S').attributes('aria-disabled')).toBeUndefined()
+
+    // The hand has closed up: the same spot (and keyboard focus) is now on the 7.
+    await handCard(wrapper, '7S').trigger('click')
+    await flushPromises()
+    expect(act).toHaveBeenCalledTimes(1)
+
+    // A moment later it is a decision again.
+    await vi.advanceTimersByTimeAsync(400)
+    await handCard(wrapper, '7S').trigger('click')
+    await flushPromises()
+    expect(act).toHaveBeenCalledTimes(2)
+    expect(act.mock.calls[1]?.[2]).toMatchObject({ action: { type: 'play', card: '7S' } })
+  })
+
+  it('takes no move while the screen is still catching up with the server', async () => {
+    const before = workedExample()
+    const wrapper = await open(before)
+    // An animating presenter (the 3D table) has not finished showing the latest step.
+    useGameStore().setPresenter(() => new Promise(() => {}))
+    const after = playMoves(before, WORKED_EXAMPLE_MOVES.slice(0, 2)).state
+    sync.mockResolvedValue(response(after, 0))
+    await vi.advanceTimersByTimeAsync(3000)
+
+    // The screen still offers the 7 (already played, as far as the server knows).
+    expect(wrapper.findAll(testId('hand-card'))).toHaveLength(4)
+    await handCard(wrapper, '7S').trigger('click')
+    await flushPromises()
+    expect(act).not.toHaveBeenCalled()
+    expect(handCard(wrapper, '7S').attributes('aria-disabled')).toBe('true')
+  })
+
+  it('treats a move refused because the game is over as a refused move, not a lost seat', async () => {
+    const shown = playMoves(workedExample(), WORKED_EXAMPLE_MOVES).state
+    const wrapper = await open(shown)
+    act.mockRejectedValue(new ApiError(410, 'game_ended', 'The game is over.'))
+    await wrapper.get(testId('action-ready')).trigger('click')
+    await flushPromises()
+
+    expect(useToasts().toasts).toMatchObject([
+      { kind: 'error', message: 'That game has already finished.' },
+    ])
+    // Still at the table, still seated.
+    expect(wrapper.find(testId('game')).exists()).toBe(true)
+    expect(loadSession('BCDFG')).not.toBeNull()
   })
 
   it('shows what the presenter has shown, not what the server last said', async () => {

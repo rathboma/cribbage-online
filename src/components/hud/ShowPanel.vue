@@ -73,6 +73,7 @@ const hands = computed(() =>
 <style scoped>
 .show-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-4);
   border-radius: var(--radius-lg);
@@ -85,6 +86,7 @@ const hands = computed(() =>
 }
 .show-panel__hand {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   padding-top: var(--space-3);
   border-top: 1px solid var(--color-cream-dark);
@@ -96,6 +98,10 @@ const hands = computed(() =>
   gap: var(--space-3);
   margin: 0;
   font-size: var(--font-size-md);
+}
+.show-panel__heading > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .show-panel__total {
   flex: none;

@@ -4,7 +4,8 @@ import type { FeedLine } from '@/game/narrate'
 
 /**
  * The last few things that happened in the play, newest last: who played what and why points
- * were scored. A log region, so screen readers read each new line out.
+ * were scored. A log region, so screen readers read each new line out; for that it has to be
+ * on the page before the lines arrive, so it is rendered even while empty.
  */
 const props = withDefaults(defineProps<{ lines: readonly FeedLine[]; max?: number }>(), { max: 2 })
 const recent = computed(() => props.lines.slice(-props.max))
@@ -26,6 +27,9 @@ const recent = computed(() => props.lines.slice(-props.max))
   font-size: var(--font-size-sm);
   line-height: 1.35;
   list-style: none;
+}
+.event-feed__line {
+  overflow-wrap: anywhere;
 }
 .event-feed__line:last-child {
   color: var(--color-ink);

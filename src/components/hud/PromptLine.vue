@@ -1,13 +1,20 @@
 <script setup lang="ts">
+import { useTemplateRef } from 'vue'
 import type { Prompt } from '@/game/prompt'
 
 /** What is going on and what to do next, with the running count during the play. */
 defineProps<{ prompt: Prompt; count: number | null }>()
+
+const text = useTemplateRef<HTMLElement>('text')
+/** Puts keyboard focus on the prompt (when the button that had it has gone). */
+defineExpose({ focus: () => text.value?.focus() })
 </script>
 
 <template>
   <div class="prompt-line">
     <p
+      ref="text"
+      tabindex="-1"
       class="prompt-line__text"
       :class="{ 'prompt-line__text--mine': prompt.mine }"
       role="status"
@@ -31,8 +38,14 @@ defineProps<{ prompt: Prompt; count: number | null }>()
   gap: var(--space-3);
 }
 .prompt-line__text {
+  min-width: 0;
   margin: 0;
   font-size: var(--font-size-md);
+  /* A 20-letter name with no spaces must wrap, not push the screen wider. */
+  overflow-wrap: anywhere;
+}
+.prompt-line__text:focus-visible {
+  outline-offset: 4px;
 }
 .prompt-line__text--mine {
   font-weight: 700;

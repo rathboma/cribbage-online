@@ -48,6 +48,7 @@ const skunkText = computed(() => {
 <style scoped>
 .game-over {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-5) var(--space-4);
   border-radius: var(--radius-lg);
@@ -58,16 +59,21 @@ const skunkText = computed(() => {
 .game-over__title {
   margin: 0;
   font-size: var(--font-size-2xl);
+  overflow-wrap: anywhere;
 }
 .game-over__scores {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: var(--space-6);
+  gap: var(--space-2) var(--space-6);
   margin: 0;
+}
+.game-over__score {
+  min-width: 0;
 }
 .game-over__score dt {
   overflow: hidden;
-  max-width: 9rem;
+  max-width: min(9rem, 100%);
   color: var(--color-ink-muted);
   font-size: var(--font-size-sm);
   text-overflow: ellipsis;

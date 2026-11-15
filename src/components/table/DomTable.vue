@@ -63,6 +63,11 @@ function use(card: CardId) {
   } else emit('update:selected', [...props.selected, card])
 }
 
+/** Holding Enter down must not play card after card: only the first press counts. */
+function ignoreRepeat(event: KeyboardEvent) {
+  if (event.repeat) event.preventDefault()
+}
+
 /** A seat's laid cards in order; `turned` marks those from an earlier count. */
 function laid(seat: Seat) {
   const current = new Set(props.view.sequence.map((p) => p.card))
@@ -109,11 +114,14 @@ watch(
       <div class="dom-table__upper">
         <div class="dom-table__zone">
           <p class="dom-table__label">
-            {{ opponentName }} ·
-            <span data-testid="opponent-count" :data-count="view.opponentHandCount">
-              {{ cards(view.opponentHandCount) }}
+            <span class="dom-table__name">{{ opponentName }}</span>
+            <span>
+              ·
+              <span data-testid="opponent-count" :data-count="view.opponentHandCount">
+                {{ cards(view.opponentHandCount) }}
+              </span>
+              in hand
             </span>
-            in hand
           </p>
           <div class="dom-table__row">
             <span v-if="view.opponentHandCount > 0" class="dom-table__fan">
@@ -145,9 +153,14 @@ watch(
             <PlayingCard v-if="view.starter" :card="view.starter" size="sm" data-testid="starter" />
             <CardBack v-else size="sm" />
           </div>
-          <div class="dom-table__pile" data-testid="crib" :data-count="view.cribCount">
+          <div
+            class="dom-table__pile dom-table__pile--crib"
+            data-testid="crib"
+            :data-count="view.cribCount"
+          >
             <p class="dom-table__label">
-              {{ Whose(seats, view.dealer) }} crib · {{ cards(view.cribCount) }}
+              <span class="dom-table__name">{{ Whose(seats, view.dealer) }}</span>
+              <span> crib · {{ cards(view.cribCount) }}</span>
             </p>
             <div class="dom-table__row dom-table__row--tight">
               <span v-if="crib.faceUp.length > 0 && !crib.counted" class="visually-hidden">
@@ -193,6 +206,7 @@ watch(
             data-testid="hand-card"
             :data-card="card"
             @click="use(card)"
+            @keydown.enter="ignoreRepeat"
           >
             <PlayingCard :card="card" />
           </button>
@@ -222,6 +236,8 @@ watch(
 /* Everything but the hand. If the screen is too short for all of it, this part scrolls and
    the hand stays where it is: the player's own cards are never out of reach. */
 .dom-table__upper {
+  /* Positioned, so visually hidden text inside scrolls with it instead of stretching the page. */
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -234,6 +250,8 @@ watch(
   --card-width: calc(var(--small-h) * 5 / 7);
   display: grid;
   flex: none;
+  /* The column is as wide as the table, not as wide as a long name. */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 2px;
 }
@@ -245,18 +263,32 @@ watch(
 }
 .dom-table__pile {
   display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 2px;
 }
+/* Only the crib gives way to a long name: the deck or starter beside it keeps its place. */
+.dom-table__pile--crib {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .dom-table__label {
+  display: flex;
+  gap: 0.35em;
+  justify-content: center;
   max-width: 100%;
   margin: 0;
-  overflow: hidden;
   font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A long name gives way; how many cards there are never does. */
+.dom-table__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dom-table__row {
   display: flex;
@@ -314,10 +346,18 @@ watch(
   background: none;
   font: inherit;
   cursor: default;
-  transition:
-    transform 0.12s,
-    opacity 0.12s;
+  transition: transform 0.12s;
   -webkit-tap-highlight-color: transparent;
+}
+/* The focus ring is cream and stands off the card, so it can't be mistaken for the amber
+   ring of a picked card; and it stays solid on a dimmed card, because only the card inside
+   the button is dimmed. */
+.hand-card:focus-visible {
+  outline: 3px solid var(--color-cream);
+  outline-offset: 4px;
+}
+.hand-card :deep(.playing-card) {
+  transition: opacity 0.12s;
 }
 .hand-card--usable,
 .hand-card--selected {
@@ -333,7 +373,12 @@ watch(
   box-shadow: 0 0 0 3px var(--color-accent);
   transform: translateY(-0.8rem);
 }
-.hand-card--blocked {
+/* Not this player's move: the cards lie flat and a shade darker, still easy to read. */
+.hand-card--idle :deep(.playing-card) {
+  opacity: 0.8;
+}
+/* This player's move, but not with this card. */
+.hand-card--blocked :deep(.playing-card) {
   opacity: 0.5;
 }
 .hand-card[aria-disabled='true'] {
