@@ -37,11 +37,16 @@ test('a share link for a game that does not exist says so', async ({ page }) => 
 test('typing the code and then a name joins the game', async ({ browser }) => {
   const host = await newPlayer(browser, 'Ada')
   const guest = await newPlayer(browser, 'Sam')
-  const code = await startGame(host)
+  // The host turns chat off and video on: the opposite of the form's defaults.
+  const code = await startGame(host, { chat: false, video: true })
 
   await guest.page.goto('/join')
   await guest.page.getByTestId('code-input').fill(code.toLowerCase())
   await expect(guest.page.getByTestId('host-name')).toHaveText('Ada')
+  // The guest is shown what the host chose, so the choices reached the server and came back.
+  const settings = guest.page.getByTestId('host-settings')
+  await expect(settings).toHaveAttribute('data-chat', 'off')
+  await expect(settings).toHaveAttribute('data-video', 'on')
   await guest.page.getByTestId('name-input').fill(guest.name)
   await guest.page.getByTestId('join-submit').click()
 

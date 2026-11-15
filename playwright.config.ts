@@ -13,7 +13,7 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: CI,
-  // A retry in CI records a trace of the failure; a test that needed one is reported as flaky.
+  // In CI a failed test is tried once more; one that then passes is reported as flaky.
   retries: CI ? 1 : 0,
   workers: CI ? 2 : undefined,
   timeout: 90_000,
@@ -21,7 +21,9 @@ export default defineConfig({
   reporter: CI ? [['github'], ['html', { open: 'never' }]] : [['list']],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
-    trace: CI ? 'on-first-retry' : 'off',
+    // The trace of a test's first failure is kept, also when the retry passes: a flake leaves
+    // evidence. (Recording costs time, so local runs don't; add --trace on to debug.)
+    trace: CI ? 'retain-on-first-failure' : 'off',
     screenshot: 'only-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

@@ -54,10 +54,14 @@ whatever the UI offers. The first time, install the browser with
   with.
 - **Selectors.** Tests find elements by `data-testid` only, never by wording or layout. Helpers
   for starting, joining and making moves are in `e2e/table.ts`.
-- **Reproducing a failure.** The server runs with `ENVIRONMENT=test` and `TEST_SEED=e2e`. Deals
-  are derived from the seed, the game code and the move number, so the same code deals the same
-  cards again; the code is random, so two runs do not play the same game. In CI the report, with
-  a trace and screenshot of each failure, is attached to the run as `playwright-report`.
+- **No fixed deals.** The server runs with `ENVIRONMENT=test` and `TEST_SEED=e2e`, but deals
+  also depend on the game code, which is random for every game, so two runs never play the same
+  cards and a failed run cannot be replayed. Tests must not rely on particular cards: they press
+  what the UI offers. (The test that needs a Go plays the highest card first until one comes up,
+  which the engine's simulator puts at 93% of hands.)
+- **Looking into a failure.** In CI the report is attached to the run as `playwright-report`,
+  with a screenshot and a trace of the first failure of each failed test, including one that
+  then passed on its retry. Locally, add `--trace on` and open the trace it prints.
 - The Playwright version is pinned exactly, because each version needs its own browser build:
   after changing it, run `npx playwright install chromium` again.
 

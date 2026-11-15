@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   CODE_PATTERN,
+  expectNoErrors,
   expectSameTable,
   handNumber,
   newPlayer,
@@ -84,6 +85,8 @@ test('one player starts a game, the other joins with the link, and they play a h
   for (const player of [host, guest]) {
     await expect(player.page.getByTestId('hand-card')).toHaveCount(6)
   }
+  // Nothing was refused by the server and nothing went wrong in either browser.
+  await expectNoErrors(host, guest)
 })
 
 test('the dealer changes and the scores add up from hand to hand', async ({ browser }) => {
@@ -110,6 +113,7 @@ test('the dealer changes and the scores add up from hand to hand', async ({ brow
   const second = await expectSameTable(host, guest)
   expect(second.scores).toEqual(shown.scores)
   expect(second.dealer).not.toBe(first.dealer)
+  await expectNoErrors(host, guest)
 })
 
 test('a player who cannot play says Go, and the hand carries on', async ({ browser }) => {
@@ -163,6 +167,7 @@ test('a player who cannot play says Go, and the hand carries on', async ({ brows
     until: async () => (await phase(host.page)) === 'show' && (await phase(guest.page)) === 'show',
   })
   await expectSameTable(host, guest)
+  await expectNoErrors(host, guest)
 })
 
 test('a whole game is played to 121', { tag: '@slow' }, async ({ browser }) => {
@@ -202,6 +207,8 @@ test('a whole game is played to 121', { tag: '@slow' }, async ({ browser }) => {
       await expect(player.page.getByTestId(testId)).toHaveCount(0)
     }
   }
+
+  await expectNoErrors(host, guest)
 
   // Reloading a finished game still shows the result; then back to the start page.
   await host.page.reload()

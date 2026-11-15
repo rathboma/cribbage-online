@@ -4,8 +4,10 @@
 # an empty local D1 database, so tests never touch the data of `yarn dev`.
 #
 # `wrangler dev` runs `yarn build` first (the build section of wrangler.jsonc). ENVIRONMENT=test
-# allows TEST_SEED: deals then depend only on the seed, the game code and the move number, so a
-# failed run can be replayed from the code shown in its trace.
+# with a TEST_SEED keeps the tests off the production random source, as issue #25 asks. It does
+# not make a run repeatable: deals also depend on the game code, which is random for every
+# game, and nothing can start a game with a chosen code. The tests therefore never rely on
+# particular cards.
 set -e
 
 PORT="${E2E_PORT:-8799}"

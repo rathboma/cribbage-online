@@ -73,9 +73,9 @@ jobs:
       - name: End-to-end tests
         run: yarn e2e
 
-      # The HTML report, with a trace and a screenshot for every test that failed or needed a
-      # retry. Download it from the run's summary page and open it with
-      # `npx playwright show-report <folder>`.
+      # The HTML report, with a screenshot and a trace of the first failure of every test that
+      # failed, including one that passed on its retry. Download it from the run's summary page
+      # and open it with `npx playwright show-report <folder>`.
       - name: Upload the Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

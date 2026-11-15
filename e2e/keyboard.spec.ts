@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
-import { expectSameTable, handNumber, nextChoice, seatTwoPlayers } from './table'
+import {
+  expectEffect,
+  expectNoErrors,
+  expectSameTable,
+  handNumber,
+  nextChoice,
+  seatTwoPlayers,
+  type Choice,
+} from './table'
 
 /** What has keyboard focus: its data-testid, its card, and whether pressing it would do anything. */
 function focused(page: Page) {
@@ -15,12 +23,12 @@ function focused(page: Page) {
 }
 
 /**
- * Makes the player's next move with Tab and Enter/Space only. Returns false when there was
- * nothing to do.
+ * Makes the player's next move with Tab and Enter/Space only, and waits for it to take effect.
+ * Returns what was pressed, or null when there was nothing to do.
  */
-async function keyboardMove(page: Page, key: 'Enter' | 'Space'): Promise<boolean> {
+async function keyboardMove(page: Page, key: 'Enter' | 'Space'): Promise<Choice | null> {
   const choice = await nextChoice(page)
-  if (!choice) return false
+  if (!choice) return null
   // Tab through the page until the wanted control has focus (the page wraps around).
   for (let presses = 0; presses < 60; presses++) {
     const at = await focused(page)
@@ -28,7 +36,8 @@ async function keyboardMove(page: Page, key: 'Enter' | 'Space'): Promise<boolean
       at?.enabled && at.testId === choice.testId && (!choice.card || at.card === choice.card)
     if (onIt) {
       await page.keyboard.press(key)
-      return true
+      await expectEffect(page, choice)
+      return choice
     }
     await page.keyboard.press('Tab')
   }
@@ -44,29 +53,17 @@ test('a whole hand can be played with the keyboard alone', async ({ browser }) =
   while ((await handNumber(host.page)) < 2 || (await handNumber(guest.page)) < 2) {
     let moved = false
     for (const player of [host, guest]) {
-      const choice = await nextChoice(player.page)
-      if (!choice) continue
-      const discarding = (await player.page.getByTestId('action-discard').count()) > 0
       // Alternate the two keys a button answers to.
-      if (!(await keyboardMove(player.page, moves % 2 ? 'Enter' : 'Space'))) continue
+      const choice = await keyboardMove(player.page, moves % 2 ? 'Enter' : 'Space')
+      if (!choice) continue
       moved = true
       moves++
-      if (choice.card && !discarding) {
-        // The card leaves the hand. (A key press that comes straight after the last card left
-        // is taken for a double press and ignored, so the card may still be there: the loop
-        // comes round again.)
-        const played = player.page.locator(`[data-testid="hand-card"][data-card="${choice.card}"]`)
-        const gone = await played
-          .waitFor({ state: 'detached', timeout: 2_000 })
-          .then(() => true)
-          .catch(() => false)
-        if (!gone) continue
-        playedByKeyboard++
-        // Focus is on one of the cards that remain, so the next one is a key press away (not
-        // back at the top of the page).
-        if ((await player.page.getByTestId('hand-card').count()) > 0) {
-          expect((await focused(player.page))?.testId).toBe('hand-card')
-        }
+      if (choice.kind !== 'play') continue
+      playedByKeyboard++
+      // The played card has left the hand. Focus is on one of the cards that remain, so the
+      // next one is a key press away (not back at the top of the page).
+      if ((await player.page.getByTestId('hand-card').count()) > 0) {
+        expect((await focused(player.page))?.testId).toBe('hand-card')
       }
     }
     if (moved) lastMove = Date.now()
@@ -80,4 +77,5 @@ test('a whole hand can be played with the keyboard alone', async ({ browser }) =
   const table = await expectSameTable(host, guest)
   expect(table.phase).toBe('discard')
   expect(table.hand).toBe('2')
+  await expectNoErrors(host, guest)
 })
