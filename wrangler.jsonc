@@ -1,0 +1,20 @@
+// Cloudflare Pages project config. See README "Local Cloudflare workflow".
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cribbage-online",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-11-01",
+  // Overridden locally by .dev.vars. Only "development" and "test" allow TEST_SEED.
+  "vars": {
+    "ENVIRONMENT": "production",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cribbage",
+      // Placeholder until the real databases are provisioned (P0.4, #6).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+}

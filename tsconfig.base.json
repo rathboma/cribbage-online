@@ -1,0 +1,9 @@
+// Strictness flags shared by every TypeScript project in the repo, so the client and server
+// builds of shared/ code are checked the same way.
+{
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true
+  }
+}

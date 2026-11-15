@@ -1,0 +1,12 @@
+// Cloudflare Pages Functions (functions/) and their server-only helpers (server/).
+// Workers runtime types only: no DOM and no Node.
+{
+  "extends": ["@vue/tsconfig/tsconfig.json", "./tsconfig.base.json"],
+  "include": ["functions/**/*.ts", "server/**/*.ts"],
+  "exclude": ["server/**/*.test.ts", "server/test/**"],
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["@cloudflare/workers-types"],
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo"
+  }
+}

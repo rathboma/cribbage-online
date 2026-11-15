@@ -1,0 +1,4 @@
+# Local-only variables for `wrangler pages dev`. Copy to `.dev.vars` (git-ignored).
+ENVIRONMENT=development
+# Uncomment to make every deal reproducible while developing (ignored in production):
+# TEST_SEED=dev
