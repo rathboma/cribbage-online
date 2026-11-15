@@ -6,6 +6,7 @@ import {
   compareCards,
   compareRanks,
   fullDeck,
+  isCard,
   isCardId,
   parseCard,
   parseCards,
@@ -57,6 +58,25 @@ describe('card ids', () => {
 
   it.each([5, null, undefined, {}, ['A', 'S']])('rejects the non-string %j', (value) => {
     expect(isCardId(value)).toBe(false)
+  })
+})
+
+describe('isCard', () => {
+  it('accepts every card of the deck', () => {
+    expect(fullDeck().every(isCard)).toBe(true)
+  })
+
+  it.each([
+    { rank: 0, suit: 'H' },
+    { rank: 14, suit: 'H' },
+    { rank: 1.5, suit: 'H' },
+    { rank: '5', suit: 'H' },
+    { rank: 5, suit: 'X' },
+    { rank: 5 },
+    null,
+    '5H',
+  ])('rejects %j', (value) => {
+    expect(isCard(value)).toBe(false)
   })
 })
 

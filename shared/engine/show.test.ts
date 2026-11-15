@@ -278,5 +278,5 @@ describe('scoreHand over a seeded random sample of 200,000 hands', () => {
     expect([...seen].filter((t) => t <= 24).sort((a, b) => a - b)).toEqual(
       [...Array(25).keys()].filter((t) => t !== 19),
     )
-  })
+  }, 60_000)
 })

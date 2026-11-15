@@ -37,6 +37,18 @@ export function isCardId(value: unknown): value is CardId {
   )
 }
 
+/** True for a well-formed Card object: an integer rank from 1 to 13 and a known suit. */
+export function isCard(value: unknown): value is Card {
+  if (typeof value !== 'object' || value === null) return false
+  const { rank, suit } = value as { rank: unknown; suit: unknown }
+  return (
+    Number.isInteger(rank) &&
+    (rank as number) >= 1 &&
+    (rank as number) <= 13 &&
+    (SUITS as readonly unknown[]).includes(suit)
+  )
+}
+
 /** Parses a `CardId` such as "TD". Throws on anything else; validate untrusted input with `isCardId`. */
 export function parseCard(id: string): Card {
   if (!isCardId(id)) throw new Error(`Not a card id: ${JSON.stringify(id)}`)
