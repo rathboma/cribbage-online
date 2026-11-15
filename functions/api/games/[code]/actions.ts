@@ -26,7 +26,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
     const { snapshot, player } = await authenticate(env.DB, request, code, now)
     const { game } = snapshot
 
-    if (game.status === 'abandoned') {
+    if (game.status === 'finished' || game.status === 'abandoned') {
       throw new HttpError(410, 'game_ended', 'That game has ended.')
     }
     // A late or repeated request from an earlier hand must never land in this one.
@@ -50,7 +50,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
     if (changed) {
       const saved = await saveState(env.DB, code, game.version, {
         state: result.state,
-        status: result.state.phase === 'game_over' ? 'finished' : 'active',
+        status: result.state.phase === 'game_over' ? 'finished' : game.status,
         gameEvents: { fromSeat: player.seat, events: result.events },
         now,
         expiresAt: now + ACTIVE_TTL_MS,

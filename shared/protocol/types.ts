@@ -93,7 +93,10 @@ export interface SyncResponse {
   serverTime: number
 }
 
-/** POST /api/games/:code/actions. Answers with a SyncResponse. */
+/**
+ * POST /api/games/:code/actions. Answers with a SyncResponse. Most moves add one `game` event;
+ * the first of the two `ready`s only changes the view (the version goes up, no event).
+ */
 export interface ActionRequest {
   action: ClientAction
   /**

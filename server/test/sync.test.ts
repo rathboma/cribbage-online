@@ -98,7 +98,11 @@ describe('GET /api/games/:code/sync', () => {
           e.kind === 'game'
             ? {
                 ...e,
-                payload: { events: e.payload.events.filter((x) => x.type !== 'cut_for_deal') },
+                payload: {
+                  events: e.payload.events.map((x) =>
+                    x.type === 'cut_for_deal' ? { ...x, cards: [] } : x,
+                  ),
+                },
               }
             : e,
         ),

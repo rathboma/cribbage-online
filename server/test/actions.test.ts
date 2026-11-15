@@ -8,7 +8,7 @@ import type {
   SyncResponse,
 } from '../../shared/protocol'
 import { playBotGame } from '../../shared/testing/http-bot'
-import { getGame } from '../db'
+import { getGame, setStatus } from '../db'
 import { api } from './api'
 
 interface Game {
@@ -120,15 +120,19 @@ describe('POST /api/games/:code/actions', () => {
   })
 
   it('lets both players discard at the same moment', async () => {
-    const g = await newGame()
-    const [a, b] = await Promise.all([
-      act(g, 0, { action: { type: 'discard', cards: await twoCards(g.code, 0) } }),
-      act(g, 1, { action: { type: 'discard', cards: await twoCards(g.code, 1) } }),
-    ])
-    expect([a.status, b.status]).toEqual([200, 200])
-    const after = (await getGame(env.DB, g.code))!
-    expect(after.state.phase).toBe('cut')
-    expect(after.version).toBe(3)
+    for (let round = 0; round < 5; round++) {
+      const g = await newGame()
+      // Read both hands first, so the two requests really overlap.
+      const [mine, theirs] = [await twoCards(g.code, 0), await twoCards(g.code, 1)]
+      const [a, b] = await Promise.all([
+        act(g, 0, { action: { type: 'discard', cards: mine } }),
+        act(g, 1, { action: { type: 'discard', cards: theirs } }),
+      ])
+      expect([a.status, b.status]).toEqual([200, 200])
+      const after = (await getGame(env.DB, g.code))!
+      expect(after.state.phase).toBe('cut')
+      expect(after.version).toBe(3)
+    }
   })
 
   it('never applies the same request twice', async () => {
@@ -168,6 +172,45 @@ describe('POST /api/games/:code/actions', () => {
     expect(res.status).toBe(409)
     expect((res.body as unknown as ApiError).error.code).toBe('stale_action')
     expect((await getGame(env.DB, g.code))!).toEqual(before)
+  })
+
+  it('refuses a late ready from an earlier hand, so it can’t land in this one', async () => {
+    const g = await newGame()
+    const game = (await getGame(env.DB, g.code))!
+    // The game is now in hand 2's show, where a ready would be legal.
+    await env.DB.prepare('UPDATE games SET state = ? WHERE code = ?')
+      .bind(JSON.stringify({ ...game.state, hand: 2, phase: 'show' }), g.code)
+      .run()
+    const before = (await getGame(env.DB, g.code))!
+    const rows = await eventRows(g.code)
+    const res = await act(g, 0, { action: { type: 'ready' }, hand: 1 })
+    expect(res.status).toBe(409)
+    expect((res.body as unknown as ApiError).error.code).toBe('stale_action')
+    expect((await getGame(env.DB, g.code))!).toEqual(before)
+    expect(await eventRows(g.code)).toBe(rows)
+  })
+
+  it.each(['finished', 'abandoned'] as const)(
+    'answers 410 game_ended for a %s game and writes nothing',
+    async (status) => {
+      const g = await newGame()
+      const game = (await getGame(env.DB, g.code))!
+      await setStatus(env.DB, g.code, game.version, { status, now: Date.now() })
+      const before = (await getGame(env.DB, g.code))!
+      const res = await act(g, 0, { action: { type: 'discard', cards: await twoCards(g.code, 0) } })
+      expect(res.status).toBe(410)
+      expect((res.body as unknown as ApiError).error.code).toBe('game_ended')
+      expect((await getGame(env.DB, g.code))!).toEqual(before)
+    },
+  )
+
+  it('answers 404 for an expired game', async () => {
+    const g = await newGame()
+    await env.DB.prepare('UPDATE games SET expires_at = ? WHERE code = ?')
+      .bind(Date.now() - 1, g.code)
+      .run()
+    const res = await act(g, 0, { action: { type: 'discard', cards: await twoCards(g.code, 0) } })
+    expect(res.status).toBe(404)
   })
 
   it('checks the token, the game and the body', async () => {
@@ -210,8 +253,14 @@ describe('a whole game over HTTP', () => {
                     payload: {
                       events: e.payload.events.filter((x) => {
                         if (x.type !== 'cut_for_deal') return true
-                        if (JSON.stringify(x.cards) !== JSON.stringify(state.firstCut)) {
-                          leaks.push(`${path}: cut_for_deal shows ${x.cards.join(' ')}`)
+                        // Exactly the cut cards and the dealer, nothing more.
+                        const expected = {
+                          type: 'cut_for_deal',
+                          cards: state.firstCut,
+                          dealer: x.dealer,
+                        }
+                        if (JSON.stringify(x) !== JSON.stringify(expected)) {
+                          leaks.push(`${path}: cut_for_deal is ${JSON.stringify(x)}`)
                         }
                         return false
                       }),

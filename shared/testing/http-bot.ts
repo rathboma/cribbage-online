@@ -116,7 +116,12 @@ export async function playBotGame(
     const s = seats[move.seat]
     const res = await call(move.seat, 'POST', `/api/games/${code}/actions`, {
       token: s.token,
-      body: { action: move.action, hand: a.hand, cursor: s.cursor, v: s.v ?? 0 },
+      body: {
+        action: move.action,
+        hand: (s.view as PlayerView).hand,
+        cursor: s.cursor,
+        v: s.v ?? 0,
+      },
     })
     expectStatus(res, 200, `action ${JSON.stringify(move.action)}`)
     absorb(move.seat, res.body as SyncResponse)
