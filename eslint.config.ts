@@ -26,6 +26,13 @@ export default defineConfigWithVueTs(
   {
     ...pluginVitest.configs.recommended,
     files: ['**/*.test.ts'],
+    rules: {
+      ...pluginVitest.configs.recommended.rules,
+      // expect(value, message) is supported by Vitest.
+      'vitest/valid-expect': ['error', { maxArgs: 2 }],
+      // Helpers named expect* count as assertions.
+      'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expect*'] }],
+    },
   },
 
   {
