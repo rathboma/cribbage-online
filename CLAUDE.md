@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+## Game rules
+
+`cribbage_rules.md` is the source of truth for how cribbage is played and
+scored. Read it before touching the rules engine, scoring UI or their tests. If
+code or an issue disagrees with it, treat that as a bug and raise it.
+
 ## Workflow
 
 Work is planned as GitHub issues. The roadmap and implementation order are in
