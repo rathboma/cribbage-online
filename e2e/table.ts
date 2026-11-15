@@ -126,31 +126,39 @@ interface Choice {
 /**
  * The control this player would press next, or null if there is nothing to do right now (not
  * their turn, or their last move is still on its way). Decided in one look at the page.
+ * Controls named in `leave` are never chosen.
  */
-export function nextChoice(page: Page, policy: Policy = 'lowest'): Promise<Choice | null> {
-  return page.evaluate((policy) => {
-    const one = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)
-    const enabled = (el: HTMLElement | null): el is HTMLElement =>
-      !!el && !(el as HTMLButtonElement).disabled && el.getAttribute('aria-disabled') !== 'true'
-    const game = one('game')
-    if (!game) return null
-    for (const testId of ['action-ready', 'action-cut', 'action-go']) {
-      if (enabled(one(testId))) return { testId }
-    }
-    const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="hand-card"]'))
-    const send = one('action-discard')
-    if (send) {
-      if (send.getAttribute('aria-disabled') === 'true') return null // on its way
-      if (enabled(send)) return { testId: 'action-discard' }
-      const pick = cards.find((c) => c.getAttribute('aria-pressed') === 'false' && enabled(c))
-      return pick ? { testId: 'hand-card', card: pick.dataset.card } : null
-    }
-    if (game.dataset.phase !== 'play') return null
-    // The hand is sorted by rank, so the last playable card is the highest.
-    const playable = cards.filter(enabled)
-    const card = policy === 'highest' ? playable.at(-1) : playable[0]
-    return card ? { testId: 'hand-card', card: card.dataset.card } : null
-  }, policy)
+export function nextChoice(
+  page: Page,
+  policy: Policy = 'lowest',
+  leave: readonly string[] = [],
+): Promise<Choice | null> {
+  return page.evaluate(
+    ({ policy, leave }) => {
+      const one = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)
+      const enabled = (el: HTMLElement | null): el is HTMLElement =>
+        !!el && !(el as HTMLButtonElement).disabled && el.getAttribute('aria-disabled') !== 'true'
+      const game = one('game')
+      if (!game) return null
+      for (const testId of ['action-ready', 'action-cut', 'action-go']) {
+        if (!leave.includes(testId) && enabled(one(testId))) return { testId }
+      }
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="hand-card"]'))
+      const send = one('action-discard')
+      if (send) {
+        if (send.getAttribute('aria-disabled') === 'true') return null // on its way
+        if (enabled(send)) return { testId: 'action-discard' }
+        const pick = cards.find((c) => c.getAttribute('aria-pressed') === 'false' && enabled(c))
+        return pick ? { testId: 'hand-card', card: pick.dataset.card } : null
+      }
+      if (game.dataset.phase !== 'play') return null
+      // The hand is sorted by rank, so the last playable card is the highest.
+      const playable = cards.filter(enabled)
+      const card = policy === 'highest' ? playable.at(-1) : playable[0]
+      return card ? { testId: 'hand-card', card: card.dataset.card } : null
+    },
+    { policy, leave: [...leave] },
+  )
 }
 
 export function control(page: Page, choice: Choice) {
@@ -160,8 +168,12 @@ export function control(page: Page, choice: Choice) {
 }
 
 /** Makes this player's next move with a real click, if they have one. Returns what was pressed. */
-export async function move(page: Page, policy: Policy = 'lowest'): Promise<Choice | null> {
-  const choice = await nextChoice(page, policy)
+export async function move(
+  page: Page,
+  policy: Policy = 'lowest',
+  leave: readonly string[] = [],
+): Promise<Choice | null> {
+  const choice = await nextChoice(page, policy, leave)
   if (choice) await control(page, choice).click()
   return choice
 }
@@ -175,6 +187,12 @@ export async function play(
   options: {
     until: () => Promise<boolean>
     policy?: Policy
+    /**
+     * Controls (by data-testid) this loop must not press. A test that wants to look at a
+     * state before acting on it - a player who has to say Go, say - leaves that control
+     * alone here: the play then stops when it is the only move left, and `until` sees it.
+     */
+    leave?: readonly string[]
     afterMove?: (by: Player, choice: Choice) => Promise<void>
     /** Give up when nobody has been able to move for this long. */
     stuckAfterMs?: number
@@ -186,7 +204,7 @@ export async function play(
     if (await options.until()) return
     let moved = false
     for (const player of players) {
-      const choice = await move(player.page, options.policy)
+      const choice = await move(player.page, options.policy, options.leave)
       if (!choice) continue
       moved = true
       await options.afterMove?.(player, choice)

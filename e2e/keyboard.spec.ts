@@ -52,14 +52,19 @@ test('a whole hand can be played with the keyboard alone', async ({ browser }) =
       moved = true
       moves++
       if (choice.card && !discarding) {
+        // The card leaves the hand. (A key press that comes straight after the last card left
+        // is taken for a double press and ignored, so the card may still be there: the loop
+        // comes round again.)
+        const played = player.page.locator(`[data-testid="hand-card"][data-card="${choice.card}"]`)
+        const gone = await played
+          .waitFor({ state: 'detached', timeout: 2_000 })
+          .then(() => true)
+          .catch(() => false)
+        if (!gone) continue
         playedByKeyboard++
-        // Once the played card has left the hand, focus is on one of the cards that remain,
-        // so the next one is a key press away (not back at the top of the page).
-        const hand = player.page.getByTestId('hand-card')
-        await expect(
-          player.page.locator(`[data-testid="hand-card"][data-card="${choice.card}"]`),
-        ).toHaveCount(0)
-        if ((await hand.count()) > 0) {
+        // Focus is on one of the cards that remain, so the next one is a key press away (not
+        // back at the top of the page).
+        if ((await player.page.getByTestId('hand-card').count()) > 0) {
           expect((await focused(player.page))?.testId).toBe('hand-card')
         }
       }

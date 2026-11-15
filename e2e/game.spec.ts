@@ -4,6 +4,7 @@ import {
   expectSameTable,
   handNumber,
   newPlayer,
+  nextChoice,
   phase,
   play,
   publicTable,
@@ -113,27 +114,39 @@ test('the dealer changes and the scores add up from hand to hand', async ({ brow
 
 test('a player who cannot play says Go, and the hand carries on', async ({ browser }) => {
   const { host, guest } = await seatTwoPlayers(browser)
-  const goButtons = async () =>
-    (await host.page.getByTestId('action-go').count()) +
-    (await guest.page.getByTestId('action-go').count())
+  /** The player who has an enabled Go button, if either does. */
+  const stuckPlayer = async () => {
+    for (const player of [host, guest]) {
+      const go = player.page.getByTestId('action-go')
+      if ((await go.count()) > 0 && (await go.getAttribute('aria-disabled')) !== 'true') {
+        return player
+      }
+    }
+    return null
+  }
 
   // Deals depend on the game code, which is random, so no seed can promise a Go in the first
   // hand. Playing the highest card first makes one all but certain within a few hands (93% of
   // hands have one; the simulator puts five hands in a row without at about one in 500,000).
+  // The play never presses Go itself: it stops when Go is the only move left.
   await play([host, guest], {
     policy: 'highest',
-    until: async () => (await goButtons()) > 0 || (await handNumber(host.page)) > 5,
+    leave: ['action-go'],
+    until: async () => (await stuckPlayer()) !== null || (await handNumber(host.page)) > 5,
   })
-  expect(await goButtons(), 'no Go was needed in five hands').toBe(1)
-
-  const stuck = (await host.page.getByTestId('action-go').count()) ? host : guest
+  const stuck = await stuckPlayer()
+  if (!stuck) throw new Error('No Go was needed in five hands')
   const other = stuck === host ? guest : host
+
   // Stuck means: it is their turn, they hold cards, and none of them can be played.
   await expect(stuck.page.getByTestId('prompt')).toHaveAttribute('data-mine', 'true')
   const cards = stuck.page.getByTestId('hand-card')
   expect(await cards.count()).toBeGreaterThan(0)
   for (const card of await cards.all()) await expect(card).toHaveAttribute('aria-disabled', 'true')
   await expect(other.page.getByTestId('action-go')).toHaveCount(0)
+  // The opponent's screen is up to date and has nothing to press either: the game waits for Go.
+  await expectSameTable(host, guest)
+  expect(await nextChoice(other.page)).toBeNull()
 
   const before = await publicTable(stuck.page)
   await stuck.page.getByTestId('action-go').click()

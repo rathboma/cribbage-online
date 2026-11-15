@@ -51,6 +51,18 @@ test('typing the code and then a name joins the game', async ({ browser }) => {
   }
 })
 
+test('pasting the whole share link into the code field finds the game', async ({ browser }) => {
+  const host = await newPlayer(browser, 'Ada')
+  const guest = await newPlayer(browser, 'Sam')
+  const code = await startGame(host)
+  const link = await host.page.getByTestId('join-link').getAttribute('href')
+  expect(link).toMatch(new RegExp(`^https?://.+/j/${code}$`))
+
+  await guest.page.goto('/join')
+  await guest.page.getByTestId('code-input').fill(link as string)
+  await expect(guest.page.getByTestId('host-name')).toHaveText('Ada')
+})
+
 test('a third person is told the game is full', async ({ browser }) => {
   const host = await newPlayer(browser, 'Ada')
   const guest = await newPlayer(browser, 'Sam')
