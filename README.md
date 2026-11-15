@@ -1,4 +1,4 @@
-# cribbage-online
+# cribbage-online for elias
 Easy way for 2 people to play cribbage against each other, no signup required.
 
 
