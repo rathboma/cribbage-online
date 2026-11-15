@@ -14,7 +14,8 @@ const id = useId()
 </script>
 
 <template>
-  <div class="toggle-switch">
+  <!-- The whole row is a <label>, so clicking the text toggles the switch too. -->
+  <label class="toggle-switch">
     <div class="toggle-switch__text">
       <span :id="`${id}-label`" class="toggle-switch__label">
         {{ label }}
@@ -36,7 +37,7 @@ const id = useId()
     >
       <span class="toggle-switch__thumb" aria-hidden="true" />
     </button>
-  </div>
+  </label>
 </template>
 
 <style scoped>
@@ -45,6 +46,8 @@ const id = useId()
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  min-height: 44px;
+  cursor: pointer;
 }
 .toggle-switch__text {
   display: grid;
@@ -85,10 +88,28 @@ const id = useId()
   left: 2px;
   width: 24px;
   height: 24px;
+  border: 2px solid var(--color-ink-muted);
   border-radius: 50%;
   background: var(--color-white);
   box-shadow: var(--shadow-sm);
   transition: transform 0.15s;
+}
+.toggle-switch__control[aria-checked='true'] .toggle-switch__thumb {
+  border-color: var(--color-white);
+}
+@media (forced-colors: active) {
+  .toggle-switch__thumb {
+    background: CanvasText;
+    border-color: CanvasText;
+  }
+  .toggle-switch__control[aria-checked='true'] {
+    background: Highlight;
+    border-color: Highlight;
+  }
+  .toggle-switch__control[aria-checked='true'] .toggle-switch__thumb {
+    background: HighlightText;
+    border-color: HighlightText;
+  }
 }
 .toggle-switch__control[aria-checked='true'] .toggle-switch__thumb {
   transform: translateX(20px);

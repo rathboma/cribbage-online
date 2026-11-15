@@ -37,13 +37,27 @@ describe('ToggleSwitch', () => {
     wrapper.unmount()
   })
 
-  it('is a native button, so it is focusable and Space/Enter toggle it', () => {
+  it('is a native button, so it is focusable and keyboard-operable', () => {
     const wrapper = mountSwitch()
     const control = wrapper.get('[role="switch"]').element as HTMLButtonElement
     expect(control.tagName).toBe('BUTTON')
     expect(control.type).toBe('button')
     control.focus()
     expect(document.activeElement).toBe(control)
+    wrapper.unmount()
+  })
+
+  it('reports the off state explicitly', () => {
+    const wrapper = mountSwitch(false)
+    expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('toggles when the label text is clicked', async () => {
+    const wrapper = mountSwitch(false)
+    ;(wrapper.get('.toggle-switch__label').element as HTMLElement).click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.props('modelValue')).toBe(true)
     wrapper.unmount()
   })
 

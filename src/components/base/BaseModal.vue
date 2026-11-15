@@ -2,136 +2,122 @@
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 
 /**
- * A dialog: centred on wide screens, a bottom sheet on phones. Traps focus while open, closes on
- * Escape or a click outside, and gives focus back to whatever had it before.
+ * A modal dialog built on the native <dialog>: the browser makes the rest of the page inert,
+ * handles Escape and puts it above everything. Centred on wide screens, a bottom sheet on phones.
  */
-const props = withDefaults(defineProps<{ title: string; dismissible?: boolean }>(), {
-  dismissible: true,
-})
+const props = withDefaults(
+  defineProps<{
+    title: string
+    /** Escape, the close button and a click outside close it. */
+    dismissible?: boolean
+    /** CSS selector of the element to focus when it opens (e.g. the least destructive action). */
+    initialFocus?: string
+    /** `alertdialog` for confirmations that interrupt (e.g. "Leave the game?"). */
+    role?: 'dialog' | 'alertdialog'
+  }>(),
+  { dismissible: true, initialFocus: undefined, role: 'dialog' },
+)
 const open = defineModel<boolean>('open', { default: false })
 
 const id = useId()
-const panel = ref<HTMLElement | null>(null)
+const dialog = ref<HTMLDialogElement | null>(null)
 let returnFocusTo: HTMLElement | null = null
-
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-function focusables(): HTMLElement[] {
-  return panel.value ? [...panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)] : []
-}
 
 function close() {
   if (props.dismissible) open.value = false
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.stopPropagation()
-    close()
-  } else if (event.key === 'Tab') {
-    // Keep focus inside the dialog.
-    const items = focusables()
-    if (items.length === 0) {
-      event.preventDefault()
-      return
-    }
-    const first = items[0] as HTMLElement
-    const last = items.at(-1) as HTMLElement
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last.focus()
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus()
-    }
-  }
+function onCancel(event: Event) {
+  // Escape: the browser would close the dialog itself; keep `open` in charge instead.
+  event.preventDefault()
+  close()
 }
 
-watch(
-  open,
-  async (isOpen) => {
-    if (isOpen) {
-      returnFocusTo = document.activeElement as HTMLElement | null
-      await nextTick()
-      ;(focusables()[0] ?? panel.value)?.focus()
-    } else {
-      returnFocusTo?.focus?.()
-      returnFocusTo = null
-    }
-  },
-  { immediate: true },
-)
+function onClick(event: MouseEvent) {
+  // A click on the dialog element itself (not its content) is a click on the backdrop.
+  if (event.target === dialog.value) close()
+}
 
-onBeforeUnmount(() => {
-  if (open.value) returnFocusTo?.focus?.()
-})
+async function show() {
+  await nextTick()
+  const el = dialog.value
+  if (!el || el.open) return
+  returnFocusTo = document.activeElement as HTMLElement | null
+  el.showModal()
+  document.documentElement.classList.add('modal-open')
+  const target = props.initialFocus
+    ? el.querySelector<HTMLElement>(props.initialFocus)
+    : el.querySelector<HTMLElement>('[autofocus]')
+  ;(target ?? el.querySelector<HTMLElement>('.base-modal__panel'))?.focus()
+}
+
+function hide() {
+  const el = dialog.value
+  if (el?.open) el.close()
+  document.documentElement.classList.remove('modal-open')
+  returnFocusTo?.focus?.()
+  returnFocusTo = null
+}
+
+watch(open, (isOpen) => (isOpen ? show() : hide()), { immediate: true })
+onBeforeUnmount(hide)
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="base-modal" @keydown="onKeydown">
-      <div class="base-modal__backdrop" data-testid="modal-backdrop" @click="close" />
-      <div
-        ref="panel"
-        class="base-modal__panel"
-        role="dialog"
-        aria-modal="true"
-        :aria-labelledby="`${id}-title`"
-        tabindex="-1"
-      >
-        <header class="base-modal__header">
-          <h2 :id="`${id}-title`" class="base-modal__title">{{ title }}</h2>
-          <button
-            v-if="dismissible"
-            type="button"
-            class="base-modal__close"
-            aria-label="Close"
-            @click="close"
-          >
-            ×
-          </button>
-        </header>
-        <div class="base-modal__body"><slot /></div>
-        <footer v-if="$slots.actions" class="base-modal__actions"><slot name="actions" /></footer>
-      </div>
+  <dialog
+    ref="dialog"
+    class="base-modal"
+    :role="role"
+    :aria-labelledby="`${id}-title`"
+    :aria-describedby="`${id}-body`"
+    @cancel="onCancel"
+    @click="onClick"
+  >
+    <div class="base-modal__panel" tabindex="-1">
+      <header class="base-modal__header">
+        <h2 :id="`${id}-title`" class="base-modal__title">{{ title }}</h2>
+        <button
+          v-if="dismissible"
+          type="button"
+          class="base-modal__close"
+          aria-label="Close"
+          @click="close"
+        >
+          ×
+        </button>
+      </header>
+      <div :id="`${id}-body`" class="base-modal__body"><slot /></div>
+      <footer v-if="$slots.actions" class="base-modal__actions"><slot name="actions" /></footer>
     </div>
-  </Teleport>
+  </dialog>
 </template>
 
 <style scoped>
 .base-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}
-.base-modal__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgb(0 0 0 / 0.45);
-}
-.base-modal__panel {
-  position: relative;
   width: 100%;
+  max-width: 100%;
   max-height: 90dvh;
-  overflow: auto;
-  padding: var(--space-5) var(--space-5) calc(var(--space-5) + env(safe-area-inset-bottom));
+  margin: auto 0 0;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--color-cream);
   color: var(--color-ink);
   box-shadow: var(--shadow-lg);
 }
+.base-modal::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
 @media (min-width: 600px) {
   .base-modal {
-    align-items: center;
-  }
-  .base-modal__panel {
     width: min(480px, calc(100% - 2 * var(--space-5)));
+    margin: auto;
     border-radius: var(--radius-lg);
   }
+}
+.base-modal__panel {
+  padding: var(--space-5) var(--space-5) calc(var(--space-5) + env(safe-area-inset-bottom));
+  outline: none;
 }
 .base-modal__header {
   display: flex;

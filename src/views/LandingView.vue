@@ -24,7 +24,7 @@ import CardFanLogo from '@/components/CardFanLogo.vue'
 }
 .landing__title {
   margin: 0;
-  font-size: var(--font-size-display);
+  font-size: var(--font-size-display) !important;
   letter-spacing: -0.02em;
 }
 .landing__pitch {

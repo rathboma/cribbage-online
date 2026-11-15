@@ -6,6 +6,7 @@ import BaseModal from './BaseModal.vue'
 let wrapper: VueWrapper | null = null
 /** The modal's `open` model, as the parent sees it. */
 let isOpen = true
+
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
@@ -39,72 +40,74 @@ async function openModal(props: Record<string, unknown> = {}) {
   return opener
 }
 
-const dialog = () => document.querySelector('[role="dialog"]') as HTMLElement | null
+const dialog = () => document.querySelector('dialog') as HTMLDialogElement
+
+async function reopen() {
+  await wrapper!.setProps({ open: true })
+  isOpen = true
+  await nextTick()
+  await nextTick()
+}
 
 describe('BaseModal', () => {
-  it('is a labelled modal dialog', async () => {
+  it('opens a native modal dialog, labelled and described', async () => {
     await openModal()
-    const el = dialog()!
-    expect(el.getAttribute('aria-modal')).toBe('true')
-    const title = document.getElementById(el.getAttribute('aria-labelledby')!)
-    expect(title?.textContent).toBe('Leave the game?')
+    const el = dialog()
+    expect(el.open).toBe(true)
+    expect(el.getAttribute('role')).toBe('dialog')
+    expect(document.getElementById(el.getAttribute('aria-labelledby')!)?.textContent).toBe(
+      'Leave the game?',
+    )
+    expect(document.getElementById(el.getAttribute('aria-describedby')!)?.textContent).toContain(
+      'Your opponent will be told.',
+    )
+    expect(document.documentElement.classList.contains('modal-open')).toBe(true)
   })
 
-  it('moves focus into the dialog and gives it back when closed', async () => {
-    const opener = await openModal()
-    expect(dialog()!.contains(document.activeElement)).toBe(true)
+  it('focuses the element asked for, and gives focus back when closed', async () => {
+    const opener = await openModal({ initialFocus: '.stay' })
+    expect(document.activeElement?.className).toBe('stay')
     await wrapper!.setProps({ open: false })
     await nextTick()
-    expect(dialog()).toBeNull()
+    expect(dialog().open).toBe(false)
     expect(document.activeElement).toBe(opener)
+    expect(document.documentElement.classList.contains('modal-open')).toBe(false)
   })
 
-  it('closes on Escape, the close button and the backdrop', async () => {
+  it('closes on Escape (the cancel event), the close button and the backdrop', async () => {
     await openModal()
-    dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    const cancel = new Event('cancel', { cancelable: true })
+    dialog().dispatchEvent(cancel)
     await nextTick()
+    expect(cancel.defaultPrevented).toBe(true)
     expect(isOpen).toBe(false)
 
-    await wrapper!.setProps({ open: true })
-    isOpen = true
-    await nextTick()
+    await reopen()
     ;(document.querySelector('[aria-label="Close"]') as HTMLElement).click()
     await nextTick()
     expect(isOpen).toBe(false)
 
-    await wrapper!.setProps({ open: true })
-    isOpen = true
-    await nextTick()
-    ;(document.querySelector('[data-testid="modal-backdrop"]') as HTMLElement).click()
+    await reopen()
+    dialog().dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
     expect(isOpen).toBe(false)
   })
 
-  it('keeps Tab inside the dialog', async () => {
+  it('stays open when its content is clicked', async () => {
     await openModal()
-    const buttons = [...dialog()!.querySelectorAll('button')]
-    const last = buttons.at(-1)!
-    last.focus()
-    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
-    last.dispatchEvent(tab)
-    expect(tab.defaultPrevented).toBe(true)
-    expect(document.activeElement).toBe(buttons[0])
-
-    const shiftTab = new KeyboardEvent('keydown', {
-      key: 'Tab',
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    })
-    buttons[0]!.dispatchEvent(shiftTab)
-    expect(document.activeElement).toBe(last)
-  })
-
-  it('can be made impossible to dismiss', async () => {
-    await openModal({ dismissible: false })
-    expect(document.querySelector('[aria-label="Close"]')).toBeNull()
-    dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    ;(document.querySelector('.base-modal__body p') as HTMLElement).click()
     await nextTick()
     expect(isOpen).toBe(true)
+  })
+
+  it('can be an alertdialog that cannot be dismissed', async () => {
+    await openModal({ dismissible: false, role: 'alertdialog' })
+    expect(dialog().getAttribute('role')).toBe('alertdialog')
+    expect(document.querySelector('[aria-label="Close"]')).toBeNull()
+    dialog().dispatchEvent(new Event('cancel', { cancelable: true }))
+    dialog().dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    expect(isOpen).toBe(true)
+    expect(dialog().open).toBe(true)
   })
 })

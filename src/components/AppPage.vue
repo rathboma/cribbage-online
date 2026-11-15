@@ -23,7 +23,17 @@ defineProps<{ back?: RouteLocationRaw; backLabel?: string }>()
   justify-content: center;
   min-height: 100vh;
   min-height: 100dvh;
-  padding: var(--space-4);
+  /* Keep clear of notches and home indicators, without making the page taller than the screen. */
+  padding: max(var(--space-4), env(safe-area-inset-top))
+    max(var(--space-4), env(safe-area-inset-right)) max(var(--space-4), env(safe-area-inset-bottom))
+    max(var(--space-4), env(safe-area-inset-left));
+}
+.app-page :slotted(h1) {
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-2xl);
+}
+.app-page :slotted(h1:focus) {
+  outline: none;
 }
 .app-page__panel {
   width: 100%;
@@ -38,7 +48,7 @@ defineProps<{ back?: RouteLocationRaw; backLabel?: string }>()
   gap: var(--space-1);
   min-height: 44px;
   align-items: center;
-  margin: calc(-1 * var(--space-3)) 0 var(--space-2);
+  margin: calc(-1 * var(--space-4)) 0 var(--space-1);
   color: var(--color-ink-muted);
   font-weight: 600;
   text-decoration: none;

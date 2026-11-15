@@ -1,22 +1,37 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useToasts } from '@/stores/toasts'
 
 const store = useToasts()
+const infos = computed(() => store.toasts.filter((t) => t.kind === 'info'))
+const errors = computed(() => store.toasts.filter((t) => t.kind === 'error'))
 </script>
 
 <template>
-  <div class="toast-host" role="status" aria-live="polite">
+  <!-- Screen readers hear only the message text, from regions that are always present. -->
+  <div class="visually-hidden" role="status" aria-live="polite" aria-atomic="false">
+    <p v-for="toast in infos" :key="toast.id">{{ toast.message }}</p>
+  </div>
+  <div class="visually-hidden" role="alert" aria-atomic="false">
+    <p v-for="toast in errors" :key="toast.id">{{ toast.message }}</p>
+  </div>
+
+  <div class="toast-host on-dark">
     <div
       v-for="toast in store.toasts"
       :key="toast.id"
       class="toast-host__toast"
       :class="`toast-host__toast--${toast.kind}`"
+      @mouseenter="store.hold(toast.id)"
+      @mouseleave="store.release(toast.id)"
+      @focusin="store.hold(toast.id)"
+      @focusout="store.release(toast.id)"
     >
-      <span>{{ toast.message }}</span>
+      <span aria-hidden="true">{{ toast.message }}</span>
       <button
         type="button"
         class="toast-host__dismiss"
-        aria-label="Dismiss"
+        :aria-label="`Dismiss: ${toast.message}`"
         @click="store.dismiss(toast.id)"
       >
         ×
@@ -28,8 +43,8 @@ const store = useToasts()
 <style scoped>
 .toast-host {
   position: fixed;
+  top: calc(var(--space-3) + env(safe-area-inset-top));
   right: 0;
-  bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
   left: 0;
   z-index: 200;
   display: grid;
@@ -41,9 +56,9 @@ const store = useToasts()
 .toast-host__toast {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   max-width: 480px;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
   border-radius: var(--radius-pill);
   background: var(--color-ink);
   color: var(--color-cream);
@@ -55,8 +70,9 @@ const store = useToasts()
   color: var(--color-white);
 }
 .toast-host__dismiss {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
+  flex: none;
   border: none;
   border-radius: 50%;
   background: transparent;

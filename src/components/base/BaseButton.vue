@@ -19,6 +19,13 @@ const props = withDefaults(
   { variant: 'primary', size: 'md', type: 'button', disabled: false, loading: false, block: false },
 )
 
+function ignoreWhileLoading(event: MouseEvent) {
+  if (props.loading) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+}
+
 const classes = computed(() => [
   'base-button',
   `base-button--${props.variant}`,
@@ -29,12 +36,15 @@ const classes = computed(() => [
 
 <template>
   <RouterLink v-if="to && !disabled" :to="to" :class="classes"><slot /></RouterLink>
+  <!-- While loading the button stays focusable (so focus isn't lost) but ignores clicks. -->
   <button
     v-else
     :type="type"
     :class="classes"
-    :disabled="disabled || loading"
+    :disabled="disabled"
+    :aria-disabled="loading || undefined"
     :aria-busy="loading || undefined"
+    @click.capture="ignoreWhileLoading"
   >
     <span v-if="loading" class="base-button__spinner" aria-hidden="true" />
     <slot />
@@ -60,12 +70,17 @@ const classes = computed(() => [
     background-color 0.15s,
     transform 0.05s;
 }
-.base-button:active:not(:disabled) {
+.base-button:active:not(:disabled):not([aria-disabled='true']) {
   transform: translateY(1px);
 }
-.base-button:disabled {
+.base-button:disabled,
+.base-button[aria-disabled='true'] {
   cursor: not-allowed;
   opacity: 0.55;
+}
+.base-button--loading[aria-disabled='true'] {
+  cursor: progress;
+  opacity: 0.8;
 }
 .base-button--lg {
   min-height: 52px;
@@ -100,6 +115,12 @@ const classes = computed(() => [
 .base-button--danger {
   background: var(--color-danger);
   color: var(--color-white);
+}
+.base-button--danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.base-button--ghost:hover:not(:disabled) {
+  text-decoration-thickness: 2px;
 }
 .base-button__spinner {
   width: 1em;

@@ -12,8 +12,18 @@ function canonicalCode(to: RouteLocationNormalized) {
 
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'landing', component: LandingView },
-  { path: '/new', name: 'new-game', component: () => import('@/views/NewGameView.vue') },
-  { path: '/join', name: 'join', component: () => import('@/views/JoinView.vue') },
+  {
+    path: '/new',
+    name: 'new-game',
+    component: () => import('@/views/NewGameView.vue'),
+    meta: { title: 'Start a game' },
+  },
+  {
+    path: '/join',
+    name: 'join',
+    component: () => import('@/views/JoinView.vue'),
+    meta: { title: 'Join a game' },
+  },
   // Deep link shared with the second player: /j/BCDFG
   {
     path: '/j/:code',
@@ -21,6 +31,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/JoinView.vue'),
     props: true,
     beforeEnter: canonicalCode,
+    meta: { title: 'Join a game' },
   },
   {
     path: '/g/:code',
@@ -28,6 +39,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/GameView.vue'),
     props: true,
     beforeEnter: canonicalCode,
+    meta: { title: (route: RouteLocationNormalized) => `Game ${String(route.params.code)}` },
   },
   // Client-side "not found". There is deliberately no static 404.html in the build:
   // Cloudflare Pages only falls back to index.html for deep links when none exists.
@@ -35,5 +47,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/views/NotFoundView.vue'),
+    meta: { title: 'Page not found' },
   },
 ]

@@ -26,6 +26,10 @@ export const colors = {
   /** Feedback. */
   danger: '#a61b1b',
   white: '#ffffff',
+  /** Focus ring on light surfaces (the default). */
+  focusLight: '#1c1b19',
+  /** Focus ring on the felt and other dark surfaces (set with the `on-dark` class). */
+  focusDark: '#e0a526',
 } as const
 
 export const fonts = {
@@ -68,22 +72,38 @@ export const shadows = {
   lg: '0 12px 32px rgb(0 0 0 / 0.3)',
 } as const
 
-/** Pairs of foreground on background that the UI uses, with the WCAG AA ratio they must meet. */
+/**
+ * Every foreground/background pair the CSS uses, with the WCAG AA ratio it must meet: 4.5:1 for
+ * text, 3:1 for controls and focus rings (WCAG 1.4.11). Keep this list in step with the styles.
+ */
 export const contrastPairs: { fg: keyof typeof colors; bg: keyof typeof colors; min: number }[] = [
-  // Text (4.5:1)
+  // Text
   { fg: 'ink', bg: 'cream', min: 4.5 },
+  { fg: 'ink', bg: 'white', min: 4.5 }, // text inputs
   { fg: 'inkMuted', bg: 'cream', min: 4.5 },
+  { fg: 'ink', bg: 'creamDark', min: 4.5 }, // neutral badge
   { fg: 'cream', bg: 'felt', min: 4.5 },
   { fg: 'cream', bg: 'feltDark', min: 4.5 },
   { fg: 'cream', bg: 'feltLight', min: 4.5 },
+  { fg: 'cream', bg: 'ink', min: 4.5 }, // toasts
   { fg: 'accentInk', bg: 'accent', min: 4.5 },
   { fg: 'cardRed', bg: 'cream', min: 4.5 },
+  { fg: 'cardRed', bg: 'white', min: 4.5 }, // red suits on cards
   { fg: 'danger', bg: 'cream', min: 4.5 },
   { fg: 'white', bg: 'danger', min: 4.5 },
-  // Controls and focus rings against their surroundings (3:1)
-  { fg: 'accent', bg: 'felt', min: 3 },
-  { fg: 'felt', bg: 'cream', min: 3 },
-  { fg: 'inkMuted', bg: 'creamDark', min: 3 },
+  { fg: 'felt', bg: 'cream', min: 4.5 }, // secondary button text
+  // Focus rings: ink on light surfaces, the accent on dark ones
+  { fg: 'focusLight', bg: 'cream', min: 3 },
+  { fg: 'focusLight', bg: 'white', min: 3 },
+  { fg: 'focusLight', bg: 'creamDark', min: 3 },
+  { fg: 'focusDark', bg: 'felt', min: 3 },
+  { fg: 'focusDark', bg: 'feltDark', min: 3 },
+  { fg: 'focusDark', bg: 'ink', min: 3 },
+  // Control boundaries and states
+  { fg: 'felt', bg: 'cream', min: 3 }, // checked switch track, secondary button border
+  { fg: 'inkMuted', bg: 'cream', min: 3 }, // input and switch borders
+  { fg: 'inkMuted', bg: 'creamDark', min: 3 }, // unchecked switch thumb border on its track
+  { fg: 'white', bg: 'felt', min: 3 }, // checked switch thumb
 ]
 
 const kebab = (name: string) => name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)

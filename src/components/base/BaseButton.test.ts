@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount, RouterLinkStub } from '@vue/test-utils'
 import BaseButton from './BaseButton.vue'
 
@@ -22,22 +22,42 @@ describe('BaseButton', () => {
     ).toBe('submit')
   })
 
-  it('is disabled while disabled or loading, and says it is busy', () => {
+  it('is disabled when disabled', () => {
     expect(mount(BaseButton, { props: { disabled: true } }).get('button').element.disabled).toBe(
       true,
     )
-    const loading = mount(BaseButton, { props: { loading: true } }).get('button')
-    expect(loading.element.disabled).toBe(true)
-    expect(loading.attributes('aria-busy')).toBe('true')
   })
 
-  it('renders a link when given a route', () => {
+  it('stays focusable while loading, says it is busy, and ignores clicks', async () => {
+    const onClick = vi.fn()
+    const wrapper = mount(BaseButton, {
+      props: { loading: true, type: 'submit', onClick },
+      attachTo: document.body,
+    })
+    const button = wrapper.get('button')
+    expect(button.element.disabled).toBe(false)
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('aria-disabled')).toBe('true')
+    button.element.focus()
+    expect(document.activeElement).toBe(button.element)
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    button.element.dispatchEvent(click)
+    expect(click.defaultPrevented).toBe(true) // so a submit button doesn't submit again
+    expect(onClick).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('renders a link styled as a button when given a route', () => {
     const wrapper = mount(BaseButton, {
       props: { to: '/new' },
       slots: { default: 'Start' },
       global: { stubs },
     })
-    expect(wrapper.findComponent(RouterLinkStub).props('to')).toBe('/new')
+    const link = wrapper.findComponent(RouterLinkStub)
+    expect(link.props('to')).toBe('/new')
+    expect(link.classes()).toEqual(
+      expect.arrayContaining(['base-button', 'base-button--primary', 'base-button--md']),
+    )
     expect(wrapper.find('button').exists()).toBe(false)
   })
 
