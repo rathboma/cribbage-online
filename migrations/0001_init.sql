@@ -27,6 +27,8 @@ CREATE TABLE players (
 
 -- One row per write: all engine events of one action share a `game` row; each chat message,
 -- signal or system notice is its own row. The id is the sync cursor.
+-- AUTOINCREMENT (not a plain rowid) on purpose: it costs an extra row write per insert, but ids
+-- are never reused after rows are deleted, so a client's cursor can never skip a new event.
 CREATE TABLE events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   game_code  TEXT NOT NULL REFERENCES games(code) ON DELETE CASCADE,

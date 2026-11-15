@@ -28,11 +28,9 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const now = Date.now()
-    // The game and its newest event id in one snapshot: that id is the cursor the guest starts
-    // from, so its first sync delivers the cut for deal and the deal.
-    const snapshot = await readSync(env.DB, code, 1, 0, 0)
+    const snapshot = await readSync(env.DB, code, { seat: 1 }, 0, 0)
     if (!snapshot || isExpired(snapshot.game, now)) throw gameNotFound()
-    const { game, latestEventId } = snapshot
+    const { game } = snapshot
     if (game.status === 'finished' || game.status === 'abandoned') {
       throw new HttpError(410, 'game_ended', 'That game has already ended.')
     }
@@ -51,7 +49,8 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, params, env }
       expiresAt: now + ACTIVE_TTL_MS,
     })
     if (result.ok) {
-      const response: JoinGameResponse = { seat: 1, playerToken, cursor: latestEventId }
+      // The newest event before the join: the guest's first sync replays the cut and the deal.
+      const response: JoinGameResponse = { seat: 1, playerToken, cursor: result.cursor }
       return json(response)
     }
     // Someone else changed the game first (most likely another join): look again.

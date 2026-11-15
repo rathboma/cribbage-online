@@ -134,21 +134,33 @@ const selectGame = (db: D1Database, code: string) =>
 const selectPlayers = (db: D1Database, code: string) =>
   db.prepare(`SELECT ${PLAYER_COLUMNS} FROM players WHERE game_code = ? ORDER BY seat`).bind(code)
 
-/** Events after `cursor` that `seat` may see (to both players, or to that seat), oldest first. */
+/** Who is reading: a known seat, or whoever holds this token (resolved inside the query). */
+export type Viewer = { seat: Seat } | { tokenHash: string }
+
+/** Events after `cursor` that the viewer may see (to both players, or to them), oldest first. */
 const selectEventsSince = (
   db: D1Database,
   code: string,
   cursor: number,
-  seat: Seat,
+  viewer: Viewer,
   limit: number,
 ) =>
-  db
-    .prepare(
-      `SELECT ${EVENT_COLUMNS} FROM events
-       WHERE game_code = ? AND id > ? AND (to_seat IS NULL OR to_seat = ?)
-       ORDER BY id LIMIT ?`,
-    )
-    .bind(code, cursor, seat, limit)
+  'seat' in viewer
+    ? db
+        .prepare(
+          `SELECT ${EVENT_COLUMNS} FROM events
+           WHERE game_code = ? AND id > ? AND (to_seat IS NULL OR to_seat = ?)
+           ORDER BY id LIMIT ?`,
+        )
+        .bind(code, cursor, viewer.seat, limit)
+    : db
+        .prepare(
+          `SELECT ${EVENT_COLUMNS} FROM events
+           WHERE game_code = ?1 AND id > ?2 AND (to_seat IS NULL OR to_seat =
+             (SELECT seat FROM players WHERE game_code = ?1 AND token_hash = ?3))
+           ORDER BY id LIMIT ?4`,
+        )
+        .bind(code, cursor, viewer.tokenHash, limit)
 
 const selectLatestEventId = (db: D1Database, code: string) =>
   db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE game_code = ?').bind(code)
@@ -206,7 +218,7 @@ export async function listEventsSince(
   seat: Seat,
   limit: number,
 ): Promise<ServerEvent[]> {
-  const { results } = await selectEventsSince(db, code, cursor, seat, limit).all<EventRecord>()
+  const { results } = await selectEventsSince(db, code, cursor, { seat }, limit).all<EventRecord>()
   return results.map(toServerEvent)
 }
 
@@ -229,19 +241,21 @@ export interface SyncSnapshot {
 
 /**
  * The game, its players and the new events, read in one batch (one transaction), so the view
- * built from the game row and the events always describe the same moment.
+ * built from the game row and the events always describe the same moment. With a token-hash
+ * viewer the caller is identified inside the same batch: find them in `players` by hash. (An
+ * unknown token sees only the events addressed to both players.)
  */
 export async function readSync(
   db: D1Database,
   code: string,
-  seat: Seat,
+  viewer: Viewer,
   cursor: number,
   limit: number,
 ): Promise<SyncSnapshot | null> {
   const [game, players, events, latest] = await db.batch([
     selectGame(db, code),
     selectPlayers(db, code),
-    selectEventsSince(db, code, cursor, seat, limit + 1),
+    selectEventsSince(db, code, cursor, viewer, limit + 1),
     selectLatestEventId(db, code),
   ])
   const gameRecord = (game?.results as GameRecord[] | undefined)?.[0]
@@ -267,39 +281,32 @@ export async function insertGame(
   game: { code: string; status: GameStatus; state: GameState; now: number; expiresAt: number },
   host: NewPlayer,
 ): Promise<{ ok: true } | { ok: false; reason: 'code_taken' }> {
-  try {
-    await db.batch([
-      db
-        .prepare(`INSERT INTO games (${GAME_COLUMNS}) VALUES (?, ?, ?, 0, ?, ?, ?)`)
-        .bind(
-          game.code,
-          game.status,
-          JSON.stringify(game.state),
-          game.now,
-          game.now,
-          game.expiresAt,
-        ),
-      insertPlayer(db, game.code, host, game.now),
-    ])
-    return { ok: true }
-  } catch (err) {
-    if (isConstraintError(err, 'games.code')) return { ok: false, reason: 'code_taken' }
-    throw err
-  }
-}
-
-function insertPlayer(db: D1Database, code: string, player: NewPlayer, now: number) {
-  return db
-    .prepare(`INSERT INTO players (${PLAYER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(
-      code,
-      player.seat,
-      player.name,
-      player.tokenHash,
-      player.chatOn ? 1 : 0,
-      player.videoOn ? 1 : 0,
-      now,
-    )
+  // A taken code inserts nothing (no exception to interpret), and the host is only added to a
+  // game that has no players yet, i.e. the one just created.
+  const [created] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO games (${GAME_COLUMNS}) VALUES (?, ?, ?, 0, ?, ?, ?)
+         ON CONFLICT (code) DO NOTHING`,
+      )
+      .bind(game.code, game.status, JSON.stringify(game.state), game.now, game.now, game.expiresAt),
+    db
+      .prepare(
+        `INSERT INTO players (${PLAYER_COLUMNS})
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+         WHERE NOT EXISTS (SELECT 1 FROM players WHERE game_code = ?1)`,
+      )
+      .bind(
+        game.code,
+        host.seat,
+        host.name,
+        host.tokenHash,
+        host.chatOn ? 1 : 0,
+        host.videoOn ? 1 : 0,
+        game.now,
+      ),
+  ])
+  return created?.meta.changes === 1 ? { ok: true } : { ok: false, reason: 'code_taken' }
 }
 
 /**
@@ -343,7 +350,9 @@ export async function saveState(
 
 /**
  * Adds the second player and saves the started game in one atomic batch, if the game is still at
- * `expectedVersion`. Of two simultaneous joins exactly one succeeds.
+ * `expectedVersion` and the seat is free. Of two simultaneous joins exactly one succeeds. On
+ * success, `cursor` is the id of the game's newest event before this write, read in the same
+ * batch: the new player's first sync from it delivers the events written here.
  */
 export async function joinGame(
   db: D1Database,
@@ -357,13 +366,19 @@ export async function joinGame(
     now: number
     expiresAt: number
   },
-): Promise<WriteResult> {
+): Promise<(WriteResult & { ok: true; cursor: number }) | { ok: false; reason: 'conflict' }> {
+  // Each later statement also requires that this player's row was inserted, so a taken seat
+  // means nothing at all is written.
+  const joined = `(SELECT version FROM games WHERE code = ?1) = ?2
+    AND EXISTS (SELECT 1 FROM players WHERE game_code = ?1 AND token_hash = ?3)`
   const statements = [
+    selectLatestEventId(db, code),
     db
       .prepare(
         `INSERT INTO players (${PLAYER_COLUMNS})
          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-         WHERE (SELECT version FROM games WHERE code = ?1) = ?8`,
+         WHERE (SELECT version FROM games WHERE code = ?1) = ?8
+           AND NOT EXISTS (SELECT 1 FROM players WHERE game_code = ?1 AND seat = ?2)`,
       )
       .bind(
         code,
@@ -378,29 +393,42 @@ export async function joinGame(
   ]
   if (write.gameEvents && write.gameEvents.events.length > 0) {
     statements.push(
-      guardedEventInsert(
-        db,
-        code,
-        expectedVersion,
-        'game',
-        write.gameEvents.fromSeat,
-        null,
-        { events: write.gameEvents.events },
-        write.now,
-      ),
+      db
+        .prepare(
+          `INSERT INTO events (game_code, kind, from_seat, to_seat, payload, created_at)
+           SELECT ?1, 'game', ?4, NULL, ?5, ?6 WHERE ${joined}`,
+        )
+        .bind(
+          code,
+          expectedVersion,
+          player.tokenHash,
+          write.gameEvents.fromSeat,
+          JSON.stringify({ events: write.gameEvents.events }),
+          write.now,
+        ),
     )
   }
-  statements.push(updateGame(db, code, expectedVersion, write))
-  try {
-    const results = await db.batch(statements)
-    return results.at(-1)?.meta.changes === 1
-      ? { ok: true, version: expectedVersion + 1 }
-      : { ok: false, reason: 'conflict' }
-  } catch (err) {
-    // The seat is already taken (primary key): another join won the race.
-    if (isConstraintError(err, 'players')) return { ok: false, reason: 'conflict' }
-    throw err
-  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE games SET state = ?4, status = ?5, version = version + 1, updated_at = ?6,
+           expires_at = ?7
+         WHERE code = ?1 AND ${joined}`,
+      )
+      .bind(
+        code,
+        expectedVersion,
+        player.tokenHash,
+        JSON.stringify(write.state),
+        write.status,
+        write.now,
+        write.expiresAt,
+      ),
+  )
+  const results = await db.batch(statements)
+  if (results.at(-1)?.meta.changes !== 1) return { ok: false, reason: 'conflict' }
+  const cursor = (results[0]?.results as { id: number }[] | undefined)?.[0]?.id ?? 0
+  return { ok: true, version: expectedVersion + 1, cursor }
 }
 
 /**
@@ -411,7 +439,12 @@ export async function setStatus(
   db: D1Database,
   code: string,
   expectedVersion: number,
-  write: { status: GameStatus; systemEvent?: NewEvent; now: number; expiresAt?: number },
+  write: {
+    status: GameStatus
+    systemEvent?: NewEvent & { kind: 'system' }
+    now: number
+    expiresAt?: number
+  },
 ): Promise<WriteResult> {
   const statements = []
   if (write.systemEvent) {
@@ -446,18 +479,19 @@ export async function setStatus(
 
 /**
  * Appends an event that doesn't change the game state (chat, signal), without a version check.
- * Returns its id.
+ * Returns its id, or null if the game no longer exists.
  */
 export async function appendEvent(
   db: D1Database,
   code: string,
   event: NewEvent,
   now: number,
-): Promise<number> {
+): Promise<number | null> {
   const row = await db
     .prepare(
       `INSERT INTO events (game_code, kind, from_seat, to_seat, payload, created_at)
-       VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS (SELECT 1 FROM games WHERE code = ?1)
+       RETURNING id`,
     )
     .bind(
       code,
@@ -468,21 +502,28 @@ export async function appendEvent(
       now,
     )
     .first<{ id: number }>()
-  if (!row) throw new Error('INSERT ... RETURNING returned no row')
-  return row.id
+  return row?.id ?? null
 }
 
-/** Records that a player was just seen (presence). */
+/**
+ * Records that a player was just seen (presence). Writes only if the stored time is at least
+ * `minIntervalMs` old, so overlapping polls can't both write. Returns whether it wrote.
+ */
 export async function touchPlayer(
   db: D1Database,
   code: string,
   seat: Seat,
   now: number,
-): Promise<void> {
-  await db
-    .prepare('UPDATE players SET last_seen_at = ? WHERE game_code = ? AND seat = ?')
-    .bind(now, code, seat)
+  minIntervalMs = 0,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE players SET last_seen_at = ?1
+       WHERE game_code = ?2 AND seat = ?3 AND last_seen_at <= ?1 - ?4`,
+    )
+    .bind(now, code, seat, minIntervalMs)
     .run()
+  return result.meta.changes > 0
 }
 
 function updateGame(
@@ -504,9 +545,4 @@ function updateGame(
       code,
       expectedVersion,
     )
-}
-
-function isConstraintError(err: unknown, mention: string): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /constraint/i.test(message) && message.includes(mention)
 }

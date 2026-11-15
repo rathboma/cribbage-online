@@ -90,10 +90,15 @@ describe('schema', () => {
     expect(await countRows('events', code)).toBe(0)
   })
 
-  it('rejects rows for a game that does not exist', async () => {
-    await expect(appendEvent(db, 'ZZZZZ', { kind: 'system', payload: {} }, NOW)).rejects.toThrow(
-      /FOREIGN KEY/i,
-    )
+  it('does not append events to a game that does not exist', async () => {
+    expect(await appendEvent(db, 'ZZZZZ', { kind: 'system', payload: {} }, NOW)).toBeNull()
+    await expect(
+      db
+        .prepare(
+          "INSERT INTO events (game_code, kind, payload, created_at) VALUES ('ZZZZZ', 'chat', '{}', 1)",
+        )
+        .run(),
+    ).rejects.toThrow(/FOREIGN KEY/i)
   })
 })
 
@@ -154,7 +159,13 @@ describe('saveState', () => {
     })
     expect(result).toEqual({ ok: true, version: 1 })
     const game = await getGame(db, code)
-    expect(game).toMatchObject({ status: 'active', version: 1, updatedAt: NOW + 5, state })
+    expect(game).toMatchObject({
+      status: 'active',
+      version: 1,
+      updatedAt: NOW + 5,
+      expiresAt: NOW + 86_400_000,
+      state,
+    })
     const events = await listEventsSince(db, code, 0, 0, 10)
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
@@ -227,10 +238,39 @@ describe('joinGame', () => {
 
   it('adds the second player and saves the started game together', async () => {
     const code = await newGame()
-    expect(await joinGame(db, code, player(1), 0, start())).toEqual({ ok: true, version: 1 })
+    const before = (await appendEvent(db, code, { kind: 'system', payload: {} }, NOW)) as number
+    expect(await joinGame(db, code, player(1), 0, start(NOW + 7))).toEqual({
+      ok: true,
+      version: 1,
+      cursor: before,
+    })
     expect((await listPlayers(db, code)).map((p) => p.seat)).toEqual([0, 1])
-    expect(await getGame(db, code)).toMatchObject({ status: 'active', version: 1 })
-    expect(await countRows('events', code)).toBe(1)
+    expect(await getGame(db, code)).toMatchObject({
+      status: 'active',
+      version: 1,
+      updatedAt: NOW + 7,
+      expiresAt: NOW + 7 + 86_400_000,
+    })
+    expect(await countRows('events', code)).toBe(2)
+    // The returned cursor is just before the join's own events.
+    const after = await listEventsSince(db, code, before, 1, 10)
+    expect(after.map((e) => e.kind)).toEqual(['game'])
+  })
+
+  it('reports a cursor of 0 for a game with no events yet', async () => {
+    const code = await newGame()
+    expect(await joinGame(db, code, player(1), 0, start())).toMatchObject({ ok: true, cursor: 0 })
+  })
+
+  it('lets real database errors through instead of calling them conflicts', async () => {
+    const code = await newGame()
+    const host = (await listPlayers(db, code))[0]!
+    // Reusing the host's token hash breaks the UNIQUE constraint: an error, not a lost race.
+    await expect(
+      joinGame(db, code, player(1, { tokenHash: host.tokenHash }), 0, start()),
+    ).rejects.toThrow(/UNIQUE/)
+    expect(await countRows('players', code)).toBe(1)
+    expect((await getGame(db, code))?.version).toBe(0)
   })
 
   it('lets exactly one of two simultaneous joins succeed', async () => {
@@ -267,6 +307,12 @@ describe('joinGame', () => {
 })
 
 describe('setStatus', () => {
+  it('can move the expiry with the status', async () => {
+    const code = await newGame()
+    await setStatus(db, code, 0, { status: 'finished', now: NOW, expiresAt: NOW + 42 })
+    expect((await getGame(db, code))?.expiresAt).toBe(NOW + 42)
+  })
+
   it('changes the status through the version check, with an optional system event', async () => {
     const code = await newGame()
     const result = await setStatus(db, code, 0, {
@@ -309,21 +355,13 @@ describe('setStatus', () => {
 describe('events', () => {
   it('lists events after a cursor in id order, only those the seat may see', async () => {
     const code = await newGame()
+    const append = async (event: Parameters<typeof appendEvent>[2]) =>
+      (await appendEvent(db, code, event, NOW)) as number
     const ids = [
-      await appendEvent(db, code, { kind: 'chat', fromSeat: 0, payload: { text: 'hi' } }, NOW),
-      await appendEvent(
-        db,
-        code,
-        { kind: 'signal', fromSeat: 0, toSeat: 1, payload: { s: 1 } },
-        NOW,
-      ),
-      await appendEvent(
-        db,
-        code,
-        { kind: 'signal', fromSeat: 1, toSeat: 0, payload: { s: 2 } },
-        NOW,
-      ),
-      await appendEvent(db, code, { kind: 'system', payload: { note: 'both' } }, NOW),
+      await append({ kind: 'chat', fromSeat: 0, payload: { text: 'hi' } }),
+      await append({ kind: 'signal', fromSeat: 0, toSeat: 1, payload: { s: 1 } }),
+      await append({ kind: 'signal', fromSeat: 1, toSeat: 0, payload: { s: 2 } }),
+      await append({ kind: 'system', payload: { note: 'both' } }),
     ]
     expect(ids).toEqual([...ids].sort((a, b) => a - b))
 
@@ -366,30 +404,40 @@ describe('readSync', () => {
     const code = await newGame()
     const ids: number[] = []
     for (let i = 0; i < 5; i++) {
-      ids.push(await appendEvent(db, code, { kind: 'chat', payload: { i } }, NOW))
+      ids.push((await appendEvent(db, code, { kind: 'chat', payload: { i } }, NOW)) as number)
     }
-    const snapshot = await readSync(db, code, 0, ids[0]!, 3)
+    const snapshot = await readSync(db, code, { seat: 0 }, ids[0]!, 3)
     expect(snapshot?.game.code).toBe(code)
     expect(snapshot?.players.map((p) => p.seat)).toEqual([0])
     expect(snapshot?.events.map((e) => e.id)).toEqual(ids.slice(1, 4))
     expect(snapshot?.more).toBe(true)
     expect(snapshot?.latestEventId).toBe(ids[4])
 
-    const rest = await readSync(db, code, 0, ids[3]!, 3)
+    const rest = await readSync(db, code, { seat: 0 }, ids[3]!, 3)
     expect(rest?.events.map((e) => e.id)).toEqual([ids[4]])
     expect(rest?.more).toBe(false)
   })
 
   it('returns null for an unknown game', async () => {
-    expect(await readSync(db, 'QQQQQ', 0, 0, 10)).toBeNull()
+    expect(await readSync(db, 'QQQQQ', { seat: 0 }, 0, 10)).toBeNull()
   })
 })
 
 describe('touchPlayer', () => {
-  it('records when a player was last seen', async () => {
+  it('records when a player was last seen, in their own game only', async () => {
     const code = await newGame()
-    await touchPlayer(db, code, 0, NOW + 1234)
+    const other = await newGame()
+    expect(await touchPlayer(db, code, 0, NOW + 1234)).toBe(true)
     expect((await listPlayers(db, code))[0]?.lastSeenAt).toBe(NOW + 1234)
+    expect((await listPlayers(db, other))[0]?.lastSeenAt).toBe(NOW)
+  })
+
+  it('skips the write when the player was seen within the interval', async () => {
+    const code = await newGame()
+    expect(await touchPlayer(db, code, 0, NOW + 19_999, 20_000)).toBe(false)
+    expect((await listPlayers(db, code))[0]?.lastSeenAt).toBe(NOW)
+    expect(await touchPlayer(db, code, 0, NOW + 20_000, 20_000)).toBe(true)
+    expect((await listPlayers(db, code))[0]?.lastSeenAt).toBe(NOW + 20_000)
   })
 })
 
