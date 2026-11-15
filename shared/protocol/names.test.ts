@@ -16,12 +16,15 @@ describe('player names', () => {
     expect(parsePlayerName(input)).toBe(name)
   })
 
-  it.each(['', '   ', 'x'.repeat(21), 'tab\u0000name', 'bell\u0007', 'del\u007f'])(
-    'rejects %j',
-    (input) => {
-      expect(parsePlayerName(input)).toBeNull()
-    },
-  )
+  it.each(['', '   ', 'x'.repeat(21), '\u0000\u0007', '\u007f'])('rejects %j', (input) => {
+    expect(parsePlayerName(input)).toBeNull()
+  })
+
+  it('strips control characters', () => {
+    expect(parsePlayerName('Ada\u0000Lovelace')).toBe('Ada Lovelace')
+    expect(parsePlayerName('\u0007Bo\u007f')).toBe('Bo')
+    expect(parsePlayerName('line\nbreak')).toBe('line break')
+  })
 
   it('allows 20 characters', () => {
     expect(PLAYER_NAME_MAX_LENGTH).toBe(20)

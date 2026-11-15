@@ -4,6 +4,10 @@
   "name": "cribbage-online",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-11-01",
+  // Overridden locally by .dev.vars. Only "development" and "test" allow TEST_SEED.
+  "vars": {
+    "ENVIRONMENT": "production",
+  },
   "d1_databases": [
     {
       "binding": "DB",

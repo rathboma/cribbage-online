@@ -40,6 +40,9 @@ export default defineConfig(async () =>
                   compatibilityFlags: wrangler.compatibility_flags,
                   d1Databases: wrangler.d1_databases.map((db: { binding: string }) => db.binding),
                   bindings: {
+                    // Deals in server tests are reproducible (see server/rng.ts).
+                    ENVIRONMENT: 'test',
+                    TEST_SEED: 'server-tests',
                     TEST_MIGRATIONS: await readD1Migrations(
                       wrangler.d1_databases[0]?.migrations_dir ?? 'migrations',
                     ),

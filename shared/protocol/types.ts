@@ -130,14 +130,18 @@ export type ApiErrorCode =
   | EngineErrorCode
   /** The body, query or path didn't pass validation. */
   | 'bad_request'
-  /** No such route or game. */
+  /** No such API route. */
   | 'not_found'
+  /** No such game, or it has expired. */
+  | 'game_not_found'
   /** Missing or wrong player token. */
   | 'unauthorized'
   /** The game already has two players. */
   | 'game_full'
-  /** The action was for a hand that is already over. */
-  | 'stale_hand'
+  /** The game is finished or abandoned. */
+  | 'game_ended'
+  /** The action was for a hand that is already over; nothing was written. */
+  | 'stale_action'
   /** Someone else changed the game at the same moment; retry. */
   | 'conflict'
   | 'rate_limited'
