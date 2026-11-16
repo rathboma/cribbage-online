@@ -36,4 +36,14 @@
   "observability": {
     "enabled": true,
   },
+  // Pull-request branches are built by Cloudflare as Previews (`wrangler preview`), which get only
+  // the bindings listed here, never the production ones above. So a Preview has no database: the
+  // site loads, but games can't be started there (the API answers 503 or 500). To give Previews
+  // a database of their own, create one and add it here with its id, then apply the migrations to
+  // it (see README "Deployment").
+  "previews": {
+    "vars": {
+      "ENVIRONMENT": "preview",
+    },
+  },
 }

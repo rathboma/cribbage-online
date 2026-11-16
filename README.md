@@ -119,9 +119,17 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
 - With the default deploy command (`npx wrangler deploy`) the site still deploys, but migrations
   never run, so the API fails until they are applied (`npx wrangler d1 migrations apply cribbage
   --remote`).
-- **Previews:** builds of other branches upload preview versions of the same Worker, with the same
-  bindings, so they use the production database. Turn branch builds off, or point previews at a
-  separate database, before relying on them.
+- **Previews:** Cloudflare builds every other branch (each pull request) as a
+  [Preview](https://developers.cloudflare.com/workers/previews/) with `wrangler preview`. A
+  Preview gets only what the `previews` section of `wrangler.jsonc` lists, never the production
+  bindings, and that section must exist or the build fails. It sets `ENVIRONMENT=preview` and
+  gives Previews **no database**, so a Preview never touches production data: the site loads,
+  but games can't be started there. To make Previews playable, give them a database of their
+  own: create it (`npx wrangler d1 create cribbage-preview`), add it under `previews` as
+  `"d1_databases": [{ "binding": "DB", "database_name": "cribbage-preview", "database_id": "<id>",
+  "migrations_dir": "migrations" }]`, and apply the migrations to it before each Preview (for
+  example in the non-production deploy command:
+  `npx wrangler d1 migrations apply cribbage-preview --remote && npx wrangler preview`).
 - **Node:** builds need Node 24 (`.nvmrc`).
 
 ### Folder layout
