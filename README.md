@@ -120,16 +120,23 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
   never run, so the API fails until they are applied (`npx wrangler d1 migrations apply cribbage
   --remote`).
 - **Previews:** Cloudflare builds every other branch (each pull request) as a
-  [Preview](https://developers.cloudflare.com/workers/previews/) with `wrangler preview`. A
-  Preview gets only what the `previews` section of `wrangler.jsonc` lists, never the production
-  bindings, and that section must exist or the build fails. It sets `ENVIRONMENT=preview` and
-  gives Previews **no database**, so a Preview never touches production data: the site loads,
-  but games can't be started there. To make Previews playable, give them a database of their
-  own: create it (`npx wrangler d1 create cribbage-preview`), add it under `previews` as
-  `"d1_databases": [{ "binding": "DB", "database_name": "cribbage-preview", "database_id": "<id>",
-  "migrations_dir": "migrations" }]`, and apply the migrations to it before each Preview (for
-  example in the non-production deploy command:
-  `npx wrangler d1 migrations apply cribbage-preview --remote && npx wrangler preview`).
+  [Preview](https://developers.cloudflare.com/workers/previews/): the build command, then the
+  Preview command (`npx wrangler preview` by default; Settings → Build). Previews inherit nothing
+  from production: a Preview gets only what the `previews` section of `wrangler.jsonc` lists, and
+  without that section the build fails. It sets `ENVIRONMENT=preview` and gives Previews **no
+  database**, so a Preview never touches production data: the site loads, but games can't be
+  started there. Preview URLs are public unless you put Cloudflare Access in front of them.
+- **Playable Previews** need a database of their own, shared by all Previews
+  ([docs](https://developers.cloudflare.com/workers/previews/resources/)):
+  1. Create it: `npx wrangler d1 create cribbage-preview`.
+  2. Add it to `previews` in `wrangler.jsonc`, with the id that command printed:
+     `"d1_databases": [{ "binding": "DB", "database_name": "cribbage-preview", "database_id": "<id>", "migrations_dir": "migrations" }]`.
+  3. Add a `wrangler.preview-migrations.jsonc` that declares the same database at the top level
+     (`"name": "cribbage-online"`, and `d1_databases` with binding `PREVIEW_DB`, the same name
+     and id, and `"migrations_dir": "migrations"`), so wrangler's D1 commands can reach it.
+  4. Apply the migrations, once, and again whenever a branch adds one:
+     `npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc`.
+     Nothing runs this automatically, and every Preview shares this database's rows.
 - **Node:** builds need Node 24 (`.nvmrc`).
 
 ### Folder layout
