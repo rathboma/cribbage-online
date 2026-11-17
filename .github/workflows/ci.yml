@@ -46,3 +46,42 @@ jobs:
 
       - name: Build
         run: yarn build
+
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Builds the app and serves it as the Worker with a local D1 (see playwright.config.ts).
+      - name: End-to-end tests
+        run: yarn e2e
+
+      # The HTML report, with a screenshot and a trace of the first failure of every test that
+      # failed, including one that passed on its retry. Download it from the run's summary page
+      # and open it with `npx playwright show-report <folder>`.
+      - name: Upload the Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
