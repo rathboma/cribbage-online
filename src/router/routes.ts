@@ -17,6 +17,17 @@ function canonicalCode(to: RouteLocationNormalized) {
   return { ...to, params: { ...to.params, code } }
 }
 
+function devRoutes(): RouteRecordRaw[] {
+  return [
+    {
+      path: '/dev/table',
+      name: 'dev-table',
+      component: () => import('@/views/dev/DevTableView.vue'),
+      meta: { title: 'Table (dev)' },
+    },
+  ]
+}
+
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'landing', component: LandingView },
   {
@@ -48,6 +59,9 @@ export const routes: RouteRecordRaw[] = [
     beforeEnter: [canonicalCode, requireSession],
     meta: { title: (route: RouteLocationNormalized) => `Game ${String(route.params.code)}` },
   },
+  // Pages for developing the 3D table against fixture data. `import.meta.env.DEV` is false in
+  // a production build, so these routes and their chunks are left out of it altogether.
+  ...(import.meta.env.DEV ? devRoutes() : []),
   // Client-side "not found": the Worker serves index.html for any path that is not a file
   // (not_found_handling in wrangler.jsonc), and this route shows the message.
   {

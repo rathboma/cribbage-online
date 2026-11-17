@@ -15,6 +15,8 @@ describe('routes', () => {
     ['/j/BCDFG', 'join-code'],
     ['/g/BCDFG', 'game'],
     ['/no/such/page', 'not-found'],
+    // Development builds only (production leaves it out; scripts/check-client-bundle.ts checks).
+    ['/dev/table', 'dev-table'],
   ])('%s resolves to %s', (path, name) => {
     expect(makeRouter().resolve(path).name).toBe(name)
   })

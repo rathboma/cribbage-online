@@ -59,6 +59,11 @@ whatever the UI offers. The first time, install the browser with
   cards and a failed run cannot be replayed. Tests must not rely on particular cards: they press
   what the UI offers. (The test that needs a Go plays the highest card first until one comes up,
   which the engine's simulator puts at 93% of hands.)
+- **The 3D table on its own.** `e2e/scene.spec.ts` (the `scene` project) tests the three.js
+  scene at `/dev/table` with real WebGL: no frames while idle, no distortion on resize, nothing
+  left behind after mounting and unmounting it 20 times, recovery from a lost context. That page
+  only exists in development builds, so Playwright also starts a Vite dev server for it (port
+  5199). `yarn e2e --project scene` runs just these.
 - **Looking into a failure.** In CI the report is attached to the run as `playwright-report`,
   with a screenshot and a trace of the first failure of each failed test, including one that
   then passed on its retry. Locally, add `--trace on` and open the trace it prints.
@@ -150,6 +155,13 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
 
 Client code imports through two aliases: `@/` for `src/` and `@shared/` for `shared/`. Code in
 `shared/`, `functions/` and `server/` uses relative imports instead (lint enforces this).
+
+**The 3D table** (Phase 4) lives in `src/three/` as plain TypeScript classes with no Vue in them;
+`components/table/GameTable.vue` owns the canvas. It only draws a frame when something has
+changed or is moving, and every animation goes through `src/three/anim.ts`, whose clock moves
+only when told to, so animation logic is unit-tested without a browser. While `yarn dev` runs,
+http://localhost:5173/dev/table shows the table on its own (development builds only). The build
+fails if three.js would load with the landing page or a dev page would ship (`vite.config.ts`).
 
 Unit tests sit next to the code they test as `*.test.ts`. Tests under `shared/` run in Node,
 tests under `src/` in jsdom, and tests under `server/` in the Workers runtime.
