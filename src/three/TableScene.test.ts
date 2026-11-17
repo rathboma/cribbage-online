@@ -5,13 +5,18 @@ import {
   PLAY_AREA,
   TableScene,
   disposeTree,
+  type PageVisibility,
   type TableRenderer,
 } from './TableScene'
 
 /** A renderer stand-in that counts what the scene asks of it (jsdom has no WebGL). */
 function fakeRenderer() {
   let lost = false
+  const loseContext = vi.fn(() => (lost = true))
   const renderer = {
+    loseContext,
+    /** The browser gives the context back. */
+    restore: () => (lost = false),
     shadowMap: { enabled: false, type: 0 },
     info: { memory: { geometries: 0, textures: 0 } },
     properties: new Map<unknown, unknown>(),
@@ -20,7 +25,10 @@ function fakeRenderer() {
     render: vi.fn(),
     dispose: vi.fn(),
     forceContextLoss: vi.fn(() => (lost = true)),
-    getContext: () => ({ isContextLost: () => lost }),
+    getContext: () => ({
+      isContextLost: () => lost,
+      getExtension: () => (lost ? null : { loseContext }),
+    }),
   }
   return renderer
 }
@@ -49,9 +57,22 @@ function manualFrames() {
   }
 }
 
+/** The page's visibility, switched by the test. */
+function fakePage() {
+  const page = Object.assign(new EventTarget(), { hidden: false })
+  return {
+    visibility: page as unknown as PageVisibility,
+    set hidden(hidden: boolean) {
+      page.hidden = hidden
+      page.dispatchEvent(new Event('visibilitychange'))
+    },
+  }
+}
+
 function setup() {
   const renderer = fakeRenderer()
   const frames = manualFrames()
+  const page = fakePage()
   const onFrame = vi.fn()
   const onContextChange = vi.fn()
   const scene = new TableScene({
@@ -59,11 +80,12 @@ function setup() {
     frames,
     onFrame,
     onContextChange,
+    page: page.visibility,
   })
   const canvas = document.createElement('canvas')
   scene.mount(canvas)
   frames.tick() // the first frame after mounting
-  return { scene, renderer, frames, canvas, onFrame, onContextChange }
+  return { scene, renderer, frames, canvas, page, onFrame, onContextChange }
 }
 
 describe('TableScene', () => {
@@ -194,6 +216,79 @@ describe('TableScene', () => {
     })
     scene.dispose()
     expect(disposeLut).toHaveBeenCalledTimes(1)
+  })
+
+  it('jumps animations to their end while the tab is hidden, and draws once it shows', () => {
+    const { scene, frames, page } = setup()
+    const moving = { x: 0 }
+    scene.animator.tween(moving, { x: 1 }, { duration: 1000 })
+    frames.tick()
+    page.hidden = true
+    expect(moving.x).toBe(1)
+    expect(scene.animator.busy).toBe(false)
+
+    // Started while hidden: no frames will come, so it finishes at once.
+    const later = { x: 0 }
+    const animation = scene.animator.tween(later, { x: 1 }, { duration: 1000 })
+    expect(animation.done).toBe(true)
+    expect(later.x).toBe(1)
+
+    page.hidden = false
+    const before = scene.frameCount
+    frames.tick()
+    expect(scene.frameCount).toBe(before + 1)
+  })
+
+  it('jumps animations to their end when the WebGL context is lost', () => {
+    const { scene, canvas } = setup()
+    const card = { x: 0 }
+    scene.animator.tween(card, { x: 1 }, { duration: 1000 })
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }))
+    expect(card.x).toBe(1)
+    expect(scene.animator.busy).toBe(false)
+  })
+
+  it('keeps drawing when an animation throws', () => {
+    const { scene, frames } = setup()
+    scene.animator.onError = vi.fn()
+    const card = { x: 0 }
+    scene.animator.tween(card, { x: 1 }, { duration: 100, ease: (t) => t })
+    scene.animator.tween(
+      { y: 0 },
+      { y: 1 },
+      {
+        duration: 100,
+        onUpdate: () => {
+          throw new Error('boom')
+        },
+      },
+    )
+    frames.tick()
+    frames.tick(50)
+    expect(card.x).toBeCloseTo(0.5)
+    expect(frames.pending).toBe(1)
+    expect(scene.animator.onError).toHaveBeenCalled()
+  })
+
+  it('stops listening for visibility changes once disposed', () => {
+    const { scene, frames, page } = setup()
+    scene.dispose()
+    page.hidden = true
+    page.hidden = false
+    expect(frames.pending).toBe(0)
+  })
+
+  it('disposed while the context is lost, it hands the context back if the browser restores it', () => {
+    const { scene, renderer, canvas } = setup()
+    renderer.forceContextLoss() // the browser takes it
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }))
+    renderer.forceContextLoss.mockClear()
+    const report = scene.dispose()
+    expect(renderer.forceContextLoss).not.toHaveBeenCalled()
+    expect(report.contextReleased).toBe(true)
+    renderer.restore()
+    canvas.dispatchEvent(new Event('webglcontextrestored'))
+    expect(renderer.loseContext).toHaveBeenCalledTimes(1)
   })
 
   it('reports anything the renderer still holds when it is disposed', () => {

@@ -50,9 +50,31 @@ export interface Step {
   readonly duration: number
   /** Brings the step to local time t, where 0 ≤ t ≤ duration. Time only moves forward. */
   seek(t: number): void
+  /** Readies the step to play again from the start (Animator.play calls it). */
+  reset?(): void
 }
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
+
+/**
+ * Which tween is moving each property of each object. When a tween starts it takes over the
+ * properties it moves from any older tween still running, as GSAP's `overwrite: 'auto'` does:
+ * the newest instruction wins, so a card sent somewhere new mid-flight ends up there.
+ */
+const owners = new WeakMap<object, Map<PropertyKey, Step>>()
+
+function ownersOf(target: object) {
+  let map = owners.get(target)
+  if (!map) owners.set(target, (map = new Map()))
+  return map
+}
+
+/** Stops every running tween from moving these properties of `target` (all, if none given). */
+export function stopTweensOf(target: object, keys?: readonly PropertyKey[]): void {
+  const map = owners.get(target)
+  if (!map) return
+  for (const key of keys ?? [...map.keys()]) map.delete(key)
+}
 
 class TweenStep<T extends object> implements Step {
   readonly duration: number
@@ -73,16 +95,29 @@ class TweenStep<T extends object> implements Step {
 
   seek(t: number): void {
     const target = this.target as Record<keyof T, number>
-    this.from ??= this.keys.map((k) => target[k])
+    const claims = ownersOf(this.target)
+    if (!this.from) {
+      this.from = this.keys.map((k) => target[k])
+      for (const k of this.keys) claims.set(k, this)
+    }
     const end = t >= this.duration
     const p = end ? 1 : (this.options.ease ?? ease.inOutCubic)(clamp01(t / this.duration))
     this.keys.forEach((k, i) => {
+      // A newer tween has taken this property over (or it was stopped): leave it alone.
+      if (claims.get(k) !== this) return
       const from = this.from![i]!
       const to = this.to[i]!
       // Exactly the end value at the end, whatever rounding the ease did.
       target[k] = end ? to : from + (to - from) * p
+      if (end) claims.delete(k)
     })
     this.options.onUpdate?.()
+  }
+
+  reset(): void {
+    const claims = owners.get(this.target)
+    for (const k of this.keys) if (claims?.get(k) === this) claims.delete(k)
+    this.from = null
   }
 }
 
@@ -94,6 +129,9 @@ class CallStep implements Step {
     if (this.called) return
     this.called = true
     this.fn()
+  }
+  reset(): void {
+    this.called = false
   }
 }
 
@@ -168,6 +206,13 @@ export class Timeline implements Step {
       if (local >= entry.step.duration) entry.done = true
     }
   }
+
+  reset(): void {
+    for (const entry of this.entries) {
+      entry.done = false
+      entry.step.reset?.()
+    }
+  }
 }
 
 export type AnimationResult = 'completed' | 'cancelled'
@@ -183,7 +228,7 @@ export interface Animation {
   cancel(): void
 }
 
-class Playing implements Animation {
+class Playing {
   time = 0
   done = false
   readonly finished: Promise<AnimationResult>
@@ -196,19 +241,30 @@ class Playing implements Animation {
     this.finished = new Promise((resolve) => (this.settle = resolve))
   }
 
-  /** Moves time on; true once the step has reached its end. */
-  advance(ms: number): boolean {
-    if (this.done) return true
+  /** Moves time on. A step that throws is cancelled, and the error handed to `onError`. */
+  advance(ms: number, onError: (error: unknown) => void): void {
+    if (this.done) return
     this.time += ms
     const duration = this.step.duration
-    this.step.seek(Math.min(this.time, duration))
+    try {
+      this.step.seek(Math.min(this.time, duration))
+    } catch (error) {
+      this.end('cancelled')
+      onError(error)
+      return
+    }
     if (this.time >= duration) this.end('completed')
-    return this.done
   }
 
-  complete(): void {
+  complete(onError: (error: unknown) => void): void {
     if (this.done) return
-    this.step.seek(this.step.duration)
+    try {
+      this.step.seek(this.step.duration)
+    } catch (error) {
+      this.end('cancelled')
+      onError(error)
+      return
+    }
     this.end('completed')
   }
 
@@ -236,19 +292,44 @@ export class Animator {
    */
   onWake: (() => void) | null = null
 
+  /**
+   * Gets whatever a step throws (from an onUpdate or a call). The step is cancelled and every
+   * other animation carries on. By default the error is rethrown on its own, so it reaches the
+   * console and window.onerror without stopping the frame loop.
+   */
+  onError: (error: unknown) => void = (error) => {
+    queueMicrotask(() => {
+      throw error
+    })
+  }
+
   /** True while anything is playing. */
   get busy(): boolean {
     return this.playing.size > 0
   }
 
-  /** Starts a step now. It is brought to its start state at once (time 0). */
+  /**
+   * Starts a step now; it is brought to its start state at once (time 0). A step that has
+   * played before starts over. Throws if the step is already playing.
+   */
   play(step: Step): Animation {
+    for (const p of this.playing) {
+      if (p.step === step) throw new Error('Animator: this step is already playing')
+    }
+    step.reset?.()
     const wasBusy = this.busy
     const playing = new Playing(step, (p) => this.playing.delete(p))
     this.playing.add(playing)
-    playing.advance(0)
+    playing.advance(0, this.onError)
     if (!wasBusy && this.busy) this.onWake?.()
-    return playing
+    return {
+      finished: playing.finished,
+      get done() {
+        return playing.done
+      },
+      complete: () => playing.complete(this.onError),
+      cancel: () => playing.cancel(),
+    }
   }
 
   /** Shorthand for playing a timeline holding a single tween. */
@@ -260,12 +341,15 @@ export class Animator {
   advance(ms: number): void {
     const dt = Number.isFinite(ms) && ms > 0 ? ms : 0
     // A snapshot: anything started by a step's callback begins on the next advance.
-    for (const playing of [...this.playing]) playing.advance(dt)
+    for (const playing of [...this.playing]) playing.advance(dt, this.onError)
   }
 
   /** Jumps every animation to its end. */
   completeAll(): void {
-    for (const playing of [...this.playing]) playing.complete()
+    // Until nothing is left: a call at the end of one animation may start another.
+    for (let round = 0; this.busy && round < 100; round++) {
+      for (const playing of [...this.playing]) playing.complete(this.onError)
+    }
   }
 
   /** Stops every animation where it is. */

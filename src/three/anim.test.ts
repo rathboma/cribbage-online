@@ -2,7 +2,7 @@
 // Runs in plain Node, with no DOM and no requestAnimationFrame: the clock moves only when a test
 // calls advance().
 import { describe, expect, it, vi } from 'vitest'
-import { Animator, ease, Timeline } from './anim'
+import { Animator, ease, stopTweensOf, Timeline } from './anim'
 
 describe('Animator', () => {
   it('moves a tween with the manual clock and lands exactly on the end value', async () => {
@@ -168,6 +168,112 @@ describe('Animator', () => {
     expect(animator.busy).toBe(true)
     animator.advance(50)
     expect(card.x).toBeCloseTo(0.5)
+  })
+})
+
+describe('Animator: the newest instruction wins', () => {
+  it('lets a newer tween take a property over from an older one still running', () => {
+    const animator = new Animator()
+    const card = { x: 0, y: 0 }
+    const old = animator.tween(card, { x: 2, y: 2 }, { duration: 1000, ease: ease.linear })
+    animator.advance(200)
+    // Sent somewhere else mid-flight: x is the new tween's from now on, y still the old one's.
+    animator.tween(card, { x: -2 }, { duration: 300, ease: ease.linear })
+    for (let i = 0; i < 70; i++) animator.advance(16)
+    expect(card.x).toBe(-2)
+    expect(card.y).toBe(2)
+    expect(old.done).toBe(true)
+  })
+
+  it('can stop every tween moving an object, so it can be placed by hand', () => {
+    const animator = new Animator()
+    const card = { x: 0 }
+    animator.tween(card, { x: 10 }, { duration: 100, ease: ease.linear })
+    animator.advance(50)
+    stopTweensOf(card)
+    card.x = 99
+    animator.advance(50)
+    expect(card.x).toBe(99)
+  })
+})
+
+describe('Animator: errors and replays', () => {
+  it('cancels only the animation that throws, and keeps the clock running', async () => {
+    const animator = new Animator()
+    const onError = vi.fn()
+    animator.onError = onError
+    const card = { x: 0 }
+    const failing = animator.tween(
+      { y: 0 },
+      { y: 1 },
+      {
+        duration: 100,
+        onUpdate: () => {
+          throw new Error('boom')
+        },
+      },
+    )
+    expect(onError).toHaveBeenCalledWith(new Error('boom'))
+    await expect(failing.finished).resolves.toBe('cancelled')
+    expect(animator.busy).toBe(false)
+
+    const onWake = vi.fn()
+    animator.onWake = onWake
+    animator.tween(card, { x: 1 }, { duration: 100, ease: ease.linear })
+    expect(onWake).toHaveBeenCalledTimes(1)
+    animator.advance(100)
+    expect(card.x).toBe(1)
+  })
+
+  it('reports an error thrown while jumping to the end', () => {
+    const animator = new Animator()
+    const onError = vi.fn()
+    animator.onError = onError
+    animator.play(
+      new Timeline().wait(100).call(() => {
+        throw new Error('late')
+      }),
+    )
+    animator.completeAll()
+    expect(onError).toHaveBeenCalledWith(new Error('late'))
+    expect(animator.busy).toBe(false)
+  })
+
+  it('finishes animations that a completed one starts', () => {
+    const animator = new Animator()
+    const card = { x: 0 }
+    animator.play(
+      new Timeline().wait(100).call(() => {
+        animator.tween(card, { x: 1 }, { duration: 100 })
+      }),
+    )
+    animator.completeAll()
+    expect(card.x).toBe(1)
+    expect(animator.busy).toBe(false)
+  })
+
+  it('plays a timeline again from the start', () => {
+    const animator = new Animator()
+    const card = { x: 0 }
+    const calls = vi.fn()
+    const timeline = new Timeline()
+      .to(card, { x: 1 }, { duration: 100, ease: ease.linear })
+      .call(calls)
+    animator.play(timeline)
+    animator.advance(100)
+    card.x = 0
+    animator.play(timeline)
+    animator.advance(50)
+    expect(card.x).toBeCloseTo(0.5)
+    animator.advance(50)
+    expect(calls).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses to play a step that is already playing', () => {
+    const animator = new Animator()
+    const timeline = new Timeline().wait(100)
+    animator.play(timeline)
+    expect(() => animator.play(timeline)).toThrow(/already playing/)
   })
 })
 

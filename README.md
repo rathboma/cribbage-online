@@ -65,7 +65,7 @@ whatever the UI offers. The first time, install the browser with
   scene at `/dev/table` with real WebGL: no frames while idle, no distortion on resize, nothing
   left behind after mounting and unmounting it 20 times, recovery from a lost context. That page
   only exists in development builds, so Playwright also starts a Vite dev server for it (port
-  5199). `yarn e2e --project scene` runs just these.
+  5199). `yarn e2e:scene` runs just these, without building the Worker.
 - **Looking into a failure.** In CI the report is attached to the run as `playwright-report`,
   with a screenshot and a trace of the first failure of each failed test, including one that
   then passed on its retry. Locally, add `--trace on` and open the trace it prints.

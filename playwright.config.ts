@@ -4,6 +4,8 @@ import { defineConfig, devices } from '@playwright/test'
 const PORT = Number(process.env.E2E_PORT ?? 8799)
 /** A Vite dev server for the dev-only pages (/dev/table), which production builds leave out. */
 const DEV_PORT = Number(process.env.E2E_DEV_PORT ?? 5199)
+/** `yarn e2e:scene`: only the 3D scene tests, so the Worker isn't built or started. */
+const SCENE_ONLY = !!process.env.E2E_SCENE_ONLY
 const CI = !!process.env.CI
 
 /**
@@ -12,7 +14,8 @@ const CI = !!process.env.CI
  * skips the test that plays a whole game.
  *
  * The `scene` project tests the 3D table on its own at /dev/table, which only development
- * builds have, so it runs against a Vite dev server instead.
+ * builds have, so it runs against a Vite dev server instead. Both servers start for any run;
+ * `yarn e2e:scene` runs the scene tests alone, without building the Worker.
  */
 export default defineConfig({
   testDir: './e2e',
@@ -32,11 +35,15 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    {
-      name: 'chromium',
-      testIgnore: /scene\.spec\.ts/,
-      use: { ...devices['Desktop Chrome'] },
-    },
+    ...(SCENE_ONLY
+      ? []
+      : [
+          {
+            name: 'chromium',
+            testIgnore: /scene\.spec\.ts/,
+            use: { ...devices['Desktop Chrome'] },
+          },
+        ]),
     {
       name: 'scene',
       testMatch: /scene\.spec\.ts/,
@@ -44,15 +51,19 @@ export default defineConfig({
     },
   ],
   webServer: [
-    {
-      command: 'sh scripts/e2e-serve.sh',
-      url: `http://127.0.0.1:${PORT}/api/health`,
-      // Locally, a server you started yourself (`yarn e2e:serve`) is reused, which saves the
-      // build on every run. Restart it after changing the app: it serves the build it started
-      // with.
-      reuseExistingServer: !CI,
-      timeout: 180_000,
-    },
+    ...(SCENE_ONLY
+      ? []
+      : [
+          {
+            command: 'sh scripts/e2e-serve.sh',
+            url: `http://127.0.0.1:${PORT}/api/health`,
+            // Locally, a server you started yourself (`yarn e2e:serve`) is reused, which saves the
+            // build on every run. Restart it after changing the app: it serves the build it started
+            // with.
+            reuseExistingServer: !CI,
+            timeout: 180_000,
+          },
+        ]),
     {
       command: `npx vite --host 127.0.0.1 --port ${DEV_PORT} --strictPort`,
       url: `http://127.0.0.1:${DEV_PORT}/dev/table`,

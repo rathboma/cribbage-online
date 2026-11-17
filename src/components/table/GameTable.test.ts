@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { isReactive } from 'vue'
+import { isReactive, reactive } from 'vue'
 import GameTable from './GameTable.vue'
 
 // The real scene needs WebGL, which jsdom lacks; this stand-in records how the component uses it.
@@ -64,8 +64,9 @@ describe('GameTable', () => {
     expect(scene.canvas).toBe(wrapper.get('canvas').element)
     const [ready] = wrapper.emitted('ready')![0] as unknown as [FakeScene]
     expect(ready).toBe(scene)
-    expect(isReactive(ready)).toBe(false)
-    expect(scene.options).toEqual({ onFrame: expect.any(Function) })
+    // markRaw: even handed to reactive(), it never becomes a proxy.
+    expect(isReactive(reactive(ready))).toBe(false)
+    expect(scene.options).toMatchObject({ onFrame: expect.any(Function) })
   })
 
   it('passes its size and the pixel ratio to the scene whenever the box changes', () => {
@@ -87,6 +88,16 @@ describe('GameTable', () => {
       textures: 0,
       contextReleased: true,
     })
+  })
+
+  it('reports the WebGL context coming and going', () => {
+    const onContextChange = vi.fn()
+    const wrapper = mount(GameTable, { props: { options: { onContextChange } } })
+    const options = scenes[0]!.options as { onContextChange: (lost: boolean) => void }
+    options.onContextChange(true)
+    options.onContextChange(false)
+    expect(wrapper.emitted('context')).toEqual([[true], [false]])
+    expect(onContextChange.mock.calls).toEqual([[true], [false]])
   })
 
   it('reports a scene that cannot start, and cleans up after it', () => {

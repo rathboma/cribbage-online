@@ -1,6 +1,8 @@
 import {
   BoxGeometry,
+  BufferAttribute,
   Color,
+  DirectionalLight,
   Group,
   HemisphereLight,
   Light,
@@ -13,7 +15,6 @@ import {
   PerspectiveCamera,
   PlaneGeometry,
   Scene,
-  SpotLight,
   Texture,
   Vector3,
   WebGLRenderer,
@@ -76,7 +77,11 @@ export interface TableSceneOptions {
   onFrame?: (frameCount: number) => void
   /** Called when the browser takes the WebGL context away (true) and gives it back (false). */
   onContextChange?: (lost: boolean) => void
+  /** Whether the page is hidden, and its `visibilitychange` events: `document` by default. */
+  page?: PageVisibility
 }
+
+export type PageVisibility = Pick<Document, 'hidden' | 'addEventListener' | 'removeEventListener'>
 
 /** What was still allocated on the GPU when the scene was disposed: all zero when clean. */
 export interface DisposeReport {
@@ -116,14 +121,28 @@ export class TableScene {
   private readonly scheduler: FrameScheduler
   private readonly onFrame?: (frameCount: number) => void
   private readonly onContextChange?: (lost: boolean) => void
+  private readonly page: PageVisibility | null
 
   constructor(options: TableSceneOptions = {}) {
     this.createRenderer = options.createRenderer ?? defaultRenderer
     this.scheduler = options.frames ?? browserFrames
     this.onFrame = options.onFrame
     this.onContextChange = options.onContextChange
-    this.animator.onWake = () => this.invalidate()
+    this.page = options.page ?? (typeof document === 'undefined' ? null : document)
+    this.animator.onWake = () => {
+      if (this.paused) this.animator.completeAll()
+      this.invalidate()
+    }
     this.build()
+  }
+
+  /**
+   * No frames can be drawn: the tab is hidden (the browser stops animation frames) or the
+   * WebGL context is gone. Animations then jump straight to their end instead of waiting, so
+   * nothing that awaits one stalls, and the table shows the latest state once it can draw.
+   */
+  private get paused(): boolean {
+    return this.lost || (this.page?.hidden ?? false)
   }
 
   /** Frames drawn since mount. */
@@ -147,6 +166,7 @@ export class TableScene {
     // first); the scene stops drawing while the context is gone and redraws once it is back.
     canvas.addEventListener('webglcontextlost', this.handleContextLost)
     canvas.addEventListener('webglcontextrestored', this.handleContextRestored)
+    this.page?.addEventListener('visibilitychange', this.handleVisibility)
     this.renderer = renderer
     this.canvas = canvas
     this.invalidate()
@@ -183,8 +203,10 @@ export class TableScene {
     this.frameHandle = null
     this.animator.onWake = null
     this.animator.cancelAll()
-    this.canvas?.removeEventListener('webglcontextlost', this.handleContextLost)
-    this.canvas?.removeEventListener('webglcontextrestored', this.handleContextRestored)
+    const canvas = this.canvas
+    canvas?.removeEventListener('webglcontextlost', this.handleContextLost)
+    canvas?.removeEventListener('webglcontextrestored', this.handleContextRestored)
+    this.page?.removeEventListener('visibilitychange', this.handleVisibility)
 
     const renderer = this.renderer
     // Collected first: disposing a material makes the renderer forget its uniforms.
@@ -199,8 +221,19 @@ export class TableScene {
       // Counted before the renderer's own clean-up, so anything the scene forgot shows here.
       const { geometries, textures } = renderer.info.memory
       renderer.dispose()
-      renderer.forceContextLoss()
-      report = { geometries, textures, contextReleased: renderer.getContext().isContextLost() }
+      const gl = renderer.getContext()
+      if (this.lost) {
+        // Already gone, so there is nothing to hand back now. But three.js asked the browser
+        // to restore it, so hand it back if that happens.
+        canvas?.addEventListener(
+          'webglcontextrestored',
+          () => gl.getExtension('WEBGL_lose_context')?.loseContext(),
+          { once: true },
+        )
+      } else {
+        renderer.forceContextLoss()
+      }
+      report = { geometries, textures, contextReleased: gl.isContextLost() }
     }
     this.renderer = null
     this.canvas = null
@@ -212,14 +245,18 @@ export class TableScene {
     this.frameHandle = null
     if (!this.renderer || this.lost) return
     const dt = this.lastFrameTime === null ? 0 : Math.min(time - this.lastFrameTime, MAX_FRAME_MS)
-    this.animator.advance(dt)
-    this.draw()
-    if (this.animator.busy) {
-      this.lastFrameTime = time
-      this.invalidate()
-    } else {
-      // The next animation starts from its first frame, not from the end of a long idle gap.
-      this.lastFrameTime = null
+    try {
+      this.animator.advance(dt)
+    } finally {
+      // Whatever an animation did, the frame is drawn and the loop goes on.
+      this.draw()
+      if (this.animator.busy) {
+        this.lastFrameTime = time
+        this.invalidate()
+      } else {
+        // The next animation starts from its first frame, not from the end of a long idle gap.
+        this.lastFrameTime = null
+      }
     }
   }
 
@@ -234,7 +271,18 @@ export class TableScene {
     this.lost = true
     if (this.frameHandle !== null) this.scheduler.cancel(this.frameHandle)
     this.frameHandle = null
+    this.lastFrameTime = null
+    this.animator.completeAll()
     this.onContextChange?.(true)
+  }
+
+  private readonly handleVisibility = () => {
+    if (this.page?.hidden) {
+      this.animator.completeAll()
+      this.lastFrameTime = null
+    }
+    // Drawn when the tab shows again (the browser holds animation frames until then).
+    this.invalidate()
   }
 
   private readonly handleContextRestored = () => {
@@ -283,23 +331,36 @@ export class TableScene {
     scene.background = new Color(colors.feltDark)
 
     // Soft light from everywhere, warm from above and green bouncing off the felt...
-    scene.add(new HemisphereLight(0xfff6e6, colors.feltDark, 1.1))
-    // ...and a lamp over the table: a pool of light on the play area that fades towards the
-    // rail, with soft shadows under anything lifted off the felt.
-    const lamp = new SpotLight(0xfff8ee, 2.6, 0, MathUtils.degToRad(42), 0.85, 0)
-    lamp.position.set(2, 16, 7)
+    scene.add(new HemisphereLight(0xfff6e6, colors.feltDark, 1.2))
+    // ...and one lamp above and to the right. Its light is parallel, so every card on the table
+    // casts the same soft shadow wherever it lies.
+    const lamp = new DirectionalLight(0xfff8ee, 1.9)
+    lamp.position.set(3, 12, 6)
     lamp.castShadow = true
     lamp.shadow.mapSize.set(1024, 1024)
     lamp.shadow.radius = 4
     lamp.shadow.bias = -0.0005
     lamp.shadow.normalBias = 0.02
-    lamp.shadow.camera.near = 8
-    lamp.shadow.camera.far = 30
+    const reach = Math.max(PLAY_AREA.width, PLAY_AREA.depth) / 2 + 1.5
+    Object.assign(lamp.shadow.camera, {
+      left: -reach,
+      right: reach,
+      top: reach,
+      bottom: -reach,
+      near: 4,
+      far: 26,
+    })
+    lamp.shadow.camera.updateProjectionMatrix()
     scene.add(lamp, lamp.target)
 
     const felt = new Mesh(
-      new PlaneGeometry(TABLE.width, TABLE.depth),
-      new MeshStandardMaterial({ color: colors.felt, roughness: 0.95, metalness: 0 }),
+      feltGeometry(),
+      new MeshStandardMaterial({
+        color: colors.felt,
+        vertexColors: true,
+        roughness: 0.95,
+        metalness: 0,
+      }),
     )
     felt.name = 'felt'
     felt.rotation.x = -Math.PI / 2
@@ -308,6 +369,26 @@ export class TableScene {
     this.table.add(rail())
     scene.add(this.table)
   }
+}
+
+/**
+ * The felt, shaded from the middle out: full brightness over the play area, darker towards
+ * the rail, like a table under a lamp. The shading is in the vertex colours, so it costs no
+ * texture.
+ */
+function feltGeometry(): PlaneGeometry {
+  const geometry = new PlaneGeometry(TABLE.width, TABLE.depth, 30, 38)
+  const position = geometry.getAttribute('position')
+  const shade = new Float32Array(position.count * 3)
+  for (let i = 0; i < position.count; i++) {
+    // The plane lies in x/y before it is turned flat; y becomes -z.
+    const dx = position.getX(i) / (PLAY_AREA.width * 0.8)
+    const dy = position.getY(i) / (PLAY_AREA.depth * 0.8)
+    const t = MathUtils.smoothstep(Math.hypot(dx, dy), 0.45, 1.5)
+    shade.fill(1 - 0.42 * t, i * 3, i * 3 + 3)
+  }
+  geometry.setAttribute('color', new BufferAttribute(shade, 3))
+  return geometry
 }
 
 /** The wooden rail around the felt: two long sides and two short ones. */

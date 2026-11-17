@@ -6,6 +6,9 @@ import { TableScene, type DisposeReport, type TableSceneOptions } from '@/three/
  * The 3D table's canvas. This component owns the <canvas>, keeps the drawing buffer the size
  * of its box, and creates and disposes the TableScene; everything three.js lives in the scene,
  * outside Vue's reactivity. It fills whatever box its parent gives it.
+ *
+ * It imports three.js, so load it lazily (`defineAsyncComponent(() => import(...))`) and only
+ * once `webglAvailable()` says yes: players who get the simple table never download three.js.
  */
 const props = defineProps<{
   /** Passed through to the scene (the dev page counts frames with onFrame). */
@@ -19,6 +22,8 @@ const emit = defineEmits<{
   failed: [error: unknown]
   /** The scene was torn down on unmount; the report says what was left on the GPU. */
   disposed: [report: DisposeReport]
+  /** The browser took the WebGL context away (true), or gave it back (false). */
+  context: [lost: boolean]
 }>()
 
 const box = useTemplateRef<HTMLDivElement>('box')
@@ -47,7 +52,15 @@ function onPixelRatioChange() {
 
 onMounted(() => {
   if (!box.value || !canvas.value) return
-  const instance = markRaw(new TableScene(props.options))
+  const instance = markRaw(
+    new TableScene({
+      ...props.options,
+      onContextChange: (lost) => {
+        props.options?.onContextChange?.(lost)
+        emit('context', lost)
+      },
+    }),
+  )
   try {
     instance.mount(canvas.value)
   } catch (error) {

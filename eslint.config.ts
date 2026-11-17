@@ -13,6 +13,20 @@ const noAliasImports = {
 
 const zodMessage = 'zod is for server-side validation; the client imports protocol types only.'
 
+/** What a table (the DOM one or the 3D one) may not import. */
+const tablePatterns = [
+  { regex: '^zod(/|$)', message: zodMessage },
+  { regex: 'protocol/schemas', message: zodMessage },
+  {
+    regex: '(^|/)hud(/|$)',
+    message: 'A table must not import from the HUD. Wire them together in GameScreen.',
+  },
+  {
+    regex: '(^|/)stores(/|$)',
+    message: 'A table is given what is on screen as props. GameScreen reads the store.',
+  },
+]
+
 /** Imports shared/ must avoid: it runs in the browser and on Cloudflare. */
 function sharedImports({ allowZod }: { allowZod: boolean }) {
   return {
@@ -147,21 +161,24 @@ export default defineConfigWithVueTs(
     name: 'app/table-does-not-import-hud',
     files: ['src/components/table/**/*.{ts,vue}', 'src/three/**/*.{ts,vue}'],
     rules: {
+      'no-restricted-imports': ['error', { patterns: tablePatterns }],
+    },
+  },
+
+  {
+    // The 3D scene is plain TypeScript: Vue only owns the canvas (GameTable.vue), so three.js
+    // objects never end up inside Vue's reactivity.
+    name: 'app/three-has-no-vue',
+    files: ['src/three/**/*.ts'],
+    rules: {
       'no-restricted-imports': [
         'error',
         {
-          patterns: [
-            { regex: '^zod(/|$)', message: zodMessage },
-            { regex: 'protocol/schemas', message: zodMessage },
-            {
-              regex: '(^|/)hud(/|$)',
-              message: 'A table must not import from the HUD. Wire them together in GameScreen.',
-            },
-            {
-              regex: '(^|/)stores(/|$)',
-              message: 'A table is given what is on screen as props. GameScreen reads the store.',
-            },
-          ],
+          paths: ['vue', 'pinia', 'vue-router'].map((name) => ({
+            name,
+            message: 'src/three is framework-free. Vue code that drives it goes in a component.',
+          })),
+          patterns: tablePatterns,
         },
       ],
     },

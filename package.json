@@ -23,6 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "e2e:scene": "E2E_SCENE_ONLY=1 playwright test --project scene",
     "e2e:serve": "sh scripts/e2e-serve.sh",
     "db:migrate:local": "wrangler d1 migrations apply cribbage --local",
     "deploy": "sh scripts/deploy.sh",

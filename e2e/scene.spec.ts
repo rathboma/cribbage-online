@@ -80,14 +80,15 @@ test.describe('3D table scene', () => {
     }
   })
 
-  test('draws every frame while something moves, then stops', async ({ page }) => {
+  test('draws frame after frame while something moves, then stops', async ({ page }) => {
     await openTable(page)
     const before = await frames(page)
     await page.getByTestId('animate').click()
-    // The move takes 750 ms: dozens of frames at 60 a second.
+    // Frames keep coming while the 750 ms move plays (how many depends on the machine)...
+    await expect.poll(() => frames(page)).toBeGreaterThan(before + 2)
     await expect(page.getByTestId('animate')).toBeEnabled()
+    // ...and stop once it has finished.
     const after = await frames(page)
-    expect(after - before).toBeGreaterThan(10)
     await page.waitForTimeout(500)
     expect(await frames(page)).toBe(after)
   })
@@ -110,7 +111,10 @@ test.describe('3D table scene', () => {
       } as typeof original
     })
     await page.getByTestId('remount-20').click()
-    await expect(page.getByTestId('dispose-summary')).toContainText('20 clean of 20')
+    // Twenty WebGL contexts made and released: slow with software rendering on a busy machine.
+    await expect(page.getByTestId('dispose-summary')).toContainText('20 clean of 20', {
+      timeout: 30_000,
+    })
     await expect(page.getByTestId('dispose-summary')).toContainText(
       '0 geometries, 0 textures, context released',
     )
@@ -161,5 +165,29 @@ test.describe('3D table scene', () => {
     await page.getByTestId('restore-context').click()
     await expect(page.getByTestId('context-state')).toHaveText('ok')
     await expect.poll(() => frames(page)).toBeGreaterThan(lost)
+  })
+
+  test('unmounting while the context is lost is clean and quiet', async ({ page }) => {
+    await openTable(page)
+    await page.getByTestId('lose-context').click()
+    await expect(page.getByTestId('context-state')).toHaveText('lost')
+    const problems = watchConsole(page)
+    await page.getByTestId('toggle').click()
+    await expect(page.getByTestId('dispose-summary')).toContainText('1 clean of 1')
+    expect(problems).toEqual([])
+  })
+
+  test('unmounting after the context came back is clean', async ({ page }) => {
+    await openTable(page)
+    await page.getByTestId('lose-context').click()
+    await expect(page.getByTestId('context-state')).toHaveText('lost')
+    await page.getByTestId('restore-context').click()
+    await expect(page.getByTestId('context-state')).toHaveText('ok')
+    const problems = watchConsole(page)
+    await page.getByTestId('toggle').click()
+    await expect(page.getByTestId('dispose-summary')).toContainText('1 clean of 1')
+    // three.js still holds handles from before the loss and deletes them too, which WebGL
+    // reports as harmless warnings. Anything else is a problem.
+    expect(problems.filter((p) => !/object does not belong to this context/.test(p))).toEqual([])
   })
 })
