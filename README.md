@@ -170,7 +170,7 @@ generated, so don't edit them by hand; rebuild them from
 [notpeter/Vector-Playing-Cards](https://github.com/notpeter/Vector-Playing-Cards) (commit
 `861b338`) with `yarn cards:optimize <its cards-svg folder>`, which needs Playwright's Chromium.
 Aces and number cards stay SVG; the court cards are too detailed for that and become 500 px wide
-PNGs. A unit test holds the set to the download budget (1 MB gzipped, no file over 150 KB), and
+PNGs. The corner indices are drawn as outlines (in Arimo), so no card depends on a font. A unit test holds the set to the download budget (1 MB gzipped, no file over 150 KB), and
 `yarn cards:compare <old> <new>` shows whether a change is visible.
 
 **The 3D table** (Phase 4) lives in `src/three/` as plain TypeScript classes with no Vue in them;

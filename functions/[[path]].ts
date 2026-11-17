@@ -11,6 +11,10 @@
  * public/_headers): an old tab asking for a script or card image from a previous deploy would
  * poison the URL, and the page would break if that exact file came back (a revert, a rollback).
  */
+/**
+ * Paths treated as files. Any path whose last part has a dot counts, so an app route must
+ * never end in one (/j/AB.CD would get this 404, not the app's own "not found" page).
+ */
 const FILE = /^\/assets\/|\.[a-z0-9]+$/i
 
 export const onRequest: PagesFunction = async ({ request, env }) => {
@@ -22,5 +26,6 @@ export const onRequest: PagesFunction = async ({ request, env }) => {
       headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
     })
   }
-  return env.ASSETS.fetch(new Request(new URL('/', url), { method: request.method }))
+  // The original request's headers go along, so a browser that has the page gets a 304.
+  return env.ASSETS.fetch(new Request(new URL('/', url), request))
 }

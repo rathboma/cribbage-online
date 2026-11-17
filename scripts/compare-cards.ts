@@ -11,7 +11,7 @@
  * 40 dB a difference is not visible. With an out-folder, it also saves the worst card before
  * and after, side by side, with the difference amplified 4x below.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from '@playwright/test'
 import { colors } from '../src/design/tokens.ts'
@@ -19,15 +19,24 @@ import { colors } from '../src/design/tokens.ts'
 const WIDTH = 500
 const HEIGHT = Math.round((WIDTH * 242.667) / 167.0869)
 
-function dataUrl(folder: string, id: string): string | null {
-  for (const [ext, type] of [
-    ['svg', 'image/svg+xml'],
-    ['png', 'image/png'],
-  ] as const) {
-    const path = join(folder, `${id}.${ext}`)
-    if (existsSync(path)) return `data:${type};base64,${readFileSync(path).toString('base64')}`
+/** A face's file, by CardId: "KC.png", "TH.svg", or upstream's "10H.svg" for a ten. */
+const FACE = /^(?:[2-9TJQKA]|10)[CDHS]\.(svg|png)$/
+const idOf = (file: string) => file.replace(/^10/, 'T').slice(0, 2)
+
+/** The faces in a folder: CardId → file name. */
+function faces(folder: string): Map<string, string> {
+  const found = new Map<string, string>()
+  for (const file of readdirSync(folder).filter((f) => FACE.test(f))) {
+    const id = idOf(file)
+    if (found.has(id)) throw new Error(`${folder} has two files for ${id}`)
+    found.set(id, file)
   }
-  return null
+  return found
+}
+
+function dataUrl(folder: string, file: string): string {
+  const type = file.endsWith('.png') ? 'image/png' : 'image/svg+xml'
+  return `data:${type};base64,${readFileSync(join(folder, file)).toString('base64')}`
 }
 
 interface Result {
@@ -42,9 +51,12 @@ async function main() {
     console.error('Usage: yarn cards:compare <before-folder> <after-folder> [<out-folder>]')
     process.exit(1)
   }
-  const ids = readdirSync(before)
-    .filter((f) => /^[2-9TJQKA][CDHS]\.(svg|png)$/.test(f))
-    .map((f) => f.slice(0, 2))
+  const [a, b] = [faces(before), faces(after)]
+  const unmatched = [...a.keys(), ...b.keys()].filter((id) => !a.has(id) || !b.has(id))
+  if (unmatched.length > 0 || a.size === 0) {
+    throw new Error(`The two folders don't hold the same cards: ${unmatched.join(', ') || 'none'}`)
+  }
+  const ids = [...a.keys()].sort()
   const browser = await chromium.launch()
   const page = await browser.newPage()
   // tsx names inner functions with a __name helper that the page doesn't have.
@@ -52,9 +64,8 @@ async function main() {
   const results: Result[] = []
   try {
     for (const id of ids) {
-      const a = dataUrl(before, id)
-      const b = dataUrl(after, id)
-      if (!a || !b) throw new Error(`${id} is missing from ${b ? before : after}`)
+      const x = dataUrl(before, a.get(id)!)
+      const y = dataUrl(after, b.get(id)!)
       const result = await page.evaluate(
         async ({ a, b, width, height, felt }) => {
           const draw = async (src: string) => {
@@ -88,7 +99,7 @@ async function main() {
             moved: (moved / (width * height)) * 100,
           }
         },
-        { a, b, width: WIDTH, height: HEIGHT, felt: colors.felt },
+        { a: x, b: y, width: WIDTH, height: HEIGHT, felt: colors.felt },
       )
       results.push({ id, ...result })
     }
@@ -101,7 +112,11 @@ async function main() {
     const worst = results[0]
     if (out && worst) {
       mkdirSync(out, { recursive: true })
-      const png = await sideBySide(page, dataUrl(before, worst.id)!, dataUrl(after, worst.id)!)
+      const png = await sideBySide(
+        page,
+        dataUrl(before, a.get(worst.id)!),
+        dataUrl(after, b.get(worst.id)!),
+      )
       const file = join(out, `${worst.id}-before-after.png`)
       writeFileSync(file, png)
       console.log(`Worst card, before | after, difference x4 below: ${file}`)

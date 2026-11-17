@@ -45,6 +45,12 @@ describe('card art', () => {
     }
   })
 
+  it('needs no font: the corner indices are outlines', () => {
+    for (const file of images.filter((f) => f.endsWith('.svg'))) {
+      expect(read(file).toString('utf8'), file).not.toMatch(/<text\b/)
+    }
+  })
+
   it('draws the court cards at 500 px wide', () => {
     const courts = images.filter((file) => file.endsWith('.png'))
     expect(courts.map((file) => file[0]).sort()).toEqual([...'JJJJKKKKQQQQ'])

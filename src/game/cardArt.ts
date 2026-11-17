@@ -3,8 +3,8 @@ import type { CardId } from '@shared/engine/cards'
 /**
  * URLs of the card images in `src/assets/cards/` (faces by Byron Knoll, public domain; see
  * `CREDITS.md` there), built from the upstream SVGs by `yarn cards:optimize`: aces and number
- * cards are SVG, court cards are 500 px wide PNG. Every image shares the same proportions,
- * height = width × CARD_HEIGHT_PER_WIDTH.
+ * cards are SVG, court cards are 500 px wide PNG, and none needs a font. Every image shares the
+ * same proportions, height = width × CARD_HEIGHT_PER_WIDTH.
  *
  * Vite puts a hash of each file's contents in its URL (`/assets/KC-<hash>.png`), so the files
  * are cached for good (`public/_headers`) and changed art always arrives under a new URL. Only

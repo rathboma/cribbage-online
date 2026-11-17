@@ -19,16 +19,24 @@
  *   by libimagequant through sharp): 40-80 KB each and about 48 dB PSNR against the SVG.
  *
  * Both keep the upstream proportions (CARD_HEIGHT_PER_WIDTH in src/game/cardArt.ts). Files are
- * named by the engine's CardId (`10H.svg` becomes `TH.svg`); the jokers are left out. The
- * corner indices are live text in Arial: the SVGs get a fallback stack ending in sans-serif,
- * and the PNGs carry whatever Arial-compatible font Chromium found when they were drawn
- * (Liberation Sans on Linux). back.svg and CREDITS.md in the output folder are not touched;
- * other faces there are replaced. `yarn cards:compare` checks the result against another set.
+ * named by the engine's CardId (`10H.svg` becomes `TH.svg`); the jokers are left out.
+ *
+ * Upstream draws the corner indices as live text in Arial or Bitstream Vera Sans, so they would
+ * look different on every device (and the PNGs would depend on the fonts of the machine that
+ * drew them). They are turned into outlines first, in Arimo (@fontsource/arimo, SIL OFL), which
+ * is metric-compatible with Arial: every face looks the same everywhere and the output is the
+ * same on any machine.
+ *
+ * back.svg and CREDITS.md in the output folder are not touched; the other faces there are
+ * replaced, once every new one has been made. `yarn cards:compare` checks the result against
+ * another set.
  */
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { chromium, type Page } from '@playwright/test'
+import opentype, { type Font } from 'opentype.js'
 import sharp from 'sharp'
 import { optimize } from 'svgo'
 
@@ -41,18 +49,54 @@ export const RASTER_HEIGHT = Math.round((RASTER_WIDTH * ART_HEIGHT) / ART_WIDTH)
 
 const FACE_FILE = /^[2-9TJQKA][CDHS]\.(svg|png)$/
 
-/**
- * Upstream asks only for Arial (or Bitstream Vera Sans). Arial's metric-compatible stand-ins
- * and a generic family keep the corner "10" spaced right on devices without Arial.
- */
-const FONT_STACK = "Arial,Helvetica,Arimo,'Liberation Sans',sans-serif"
+/** Arimo Regular, the font the corner indices are drawn in. */
+function loadFont(): Font {
+  const file = createRequire(import.meta.url).resolve(
+    '@fontsource/arimo/files/arimo-latin-400-normal.woff',
+  )
+  const bytes = readFileSync(file)
+  return opentype.parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+}
 
-/** Fixes svgo leaves alone: the font stack, and a size in px rather than pt. */
-function prepare(svg: string): string {
-  return svg
-    .replace(/;?-inkscape-font-specification:[^;"]*/g, '')
-    .replace(/font-family:(?:Arial|Bitstream Vera Sans)(?=[;"])/g, `font-family:${FONT_STACK}`)
-    .replace(/(\s(?:width|height)="[\d.]+)pt"/g, '$1"')
+const attribute = (attrs: string, name: string) =>
+  attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
+const styleProperty = (attrs: string, name: string) =>
+  attribute(attrs, 'style')
+    ?.match(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`))?.[1]
+    ?.trim()
+
+/**
+ * Replaces each corner index - upstream's `<text><tspan>K</tspan></text>`, one character each,
+ * placed by the tspan's x and y - with the same glyph as a filled path.
+ */
+function textToPaths(svg: string, font: Font): string {
+  const out = svg.replace(
+    /<text\b([^>]*)>\s*<tspan\b([^>]*)>([^<]*)<\/tspan>\s*<\/text>/g,
+    (_match, text: string, span: string, chars: string) => {
+      // The tspan's own value wins over the text element's, as in CSS.
+      const get = (name: string) => styleProperty(span, name) ?? styleProperty(text, name)
+      const x = Number(attribute(span, 'x') ?? attribute(text, 'x'))
+      const y = Number(attribute(span, 'y') ?? attribute(text, 'y'))
+      const size = Number.parseFloat(get('font-size') ?? '')
+      if (![x, y, size].every(Number.isFinite)) throw new Error(`Can't place the text "${chars}"`)
+      const d = font.getPath(chars, x, y, size).toPathData(3)
+      const opacity = get('fill-opacity')
+      const transform = attribute(text, 'transform')
+      return (
+        `<path d="${d}" fill="${get('fill') ?? '#000000'}"` +
+        (opacity && opacity !== '1' ? ` fill-opacity="${opacity}"` : '') +
+        (transform ? ` transform="${transform}"` : '') +
+        '/>'
+      )
+    },
+  )
+  if (/<text\b/.test(out)) throw new Error('A <text> element was left that this script cannot read')
+  return out
+}
+
+/** What svgo leaves alone: the corner text, and a size in px rather than pt. */
+function prepare(svg: string, font: Font): string {
+  return textToPaths(svg, font).replace(/(\s(?:width|height)="[\d.]+)pt"/g, '$1"')
 }
 
 function optimizeSvg(svg: string): string {
@@ -94,32 +138,39 @@ async function main() {
   if (upstream.length !== 52)
     throw new Error(`Expected 52 faces in ${source}, found ${upstream.length}`)
 
-  for (const old of readdirSync(OUTPUT_DIR).filter((f) => FACE_FILE.test(f))) {
-    rmSync(join(OUTPUT_DIR, old))
-  }
-
+  const font = loadFont()
   const browser = await chromium.launch()
-  const page = await browser.newPage()
+  const faces = new Map<string, Buffer>()
   let before = 0
-  let raw = 0
-  let gzipped = 0
-  let largest = { name: '', size: 0 }
   try {
+    const page = await browser.newPage()
     for (const file of upstream.sort()) {
       const id = file.replace(/^10/, 'T').replace(/\.svg$/, '')
       const original = readFileSync(join(source, file), 'utf8')
       before += Buffer.byteLength(original)
-      const svg = prepare(original)
+      const svg = prepare(original, font)
       const court = /^[JQK]/.test(id)
-      const name = `${id}.${court ? 'png' : 'svg'}`
-      const out = court ? await quantize(await rasterize(page, svg)) : Buffer.from(optimizeSvg(svg))
-      writeFileSync(join(OUTPUT_DIR, name), out)
-      raw += out.length
-      gzipped += gzipSync(out, { level: 9 }).length
-      if (out.length > largest.size) largest = { name, size: out.length }
+      faces.set(
+        `${id}.${court ? 'png' : 'svg'}`,
+        court ? await quantize(await rasterize(page, svg)) : Buffer.from(optimizeSvg(svg)),
+      )
     }
   } finally {
     await browser.close()
+  }
+
+  // Only now that every face is ready: replace the old ones.
+  for (const old of readdirSync(OUTPUT_DIR).filter((f) => FACE_FILE.test(f))) {
+    rmSync(join(OUTPUT_DIR, old))
+  }
+  let raw = 0
+  let gzipped = 0
+  let largest = { name: '', size: 0 }
+  for (const [name, out] of faces) {
+    writeFileSync(join(OUTPUT_DIR, name), out)
+    raw += out.length
+    gzipped += gzipSync(out, { level: 9 }).length
+    if (out.length > largest.size) largest = { name, size: out.length }
   }
   const mb = (n: number) => `${(n / 1e6).toFixed(2)} MB`
   console.log(

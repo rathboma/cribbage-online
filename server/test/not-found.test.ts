@@ -35,6 +35,16 @@ describe('paths that match no file', () => {
     },
   )
 
+  it('answers a browser that already has the page with a 304', async () => {
+    const first = await exports.default.fetch('http://localhost/j/BCDFG')
+    const etag = first.headers.get('etag')!
+    await first.text()
+    const again = await exports.default.fetch('http://localhost/j/BCDFG', {
+      headers: { 'If-None-Match': etag },
+    })
+    expect(again.status).toBe(304)
+  })
+
   it('only serves pages to GET and HEAD', async () => {
     const res = await exports.default.fetch('http://localhost/g/BCDFG', { method: 'POST' })
     expect(res.status).toBe(404)

@@ -53,12 +53,18 @@ export default defineConfig(async () =>
                   // but its file watcher stops Vitest exiting when this project is filtered out
                   // with --project.)
                   serviceBindings: {
-                    ASSETS: (request: Request) =>
-                      new URL(request.url).pathname === '/'
-                        ? new Response('<!doctype html><title>app shell</title>', {
-                            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-                          })
-                        : new Response('No such file in server tests', { status: 404 }),
+                    ASSETS: (request: Request) => {
+                      if (new URL(request.url).pathname !== '/') {
+                        return new Response('No such file in server tests', { status: 404 })
+                      }
+                      const etag = '"app-shell"'
+                      if (request.headers.get('If-None-Match') === etag) {
+                        return new Response(null, { status: 304, headers: { ETag: etag } })
+                      }
+                      return new Response('<!doctype html><title>app shell</title>', {
+                        headers: { 'Content-Type': 'text/html; charset=utf-8', ETag: etag },
+                      })
+                    },
                   },
                 },
               }),
