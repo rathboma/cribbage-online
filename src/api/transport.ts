@@ -1,0 +1,367 @@
+/**
+ * How the client stays in sync with the server. The store talks to a GameTransport, so the
+ * polling implementation here can later be swapped for long-polling (P6.4) without touching it.
+ */
+import type {
+  ClientAction,
+  GameStatus,
+  PlayerInfo,
+  PlayerView,
+  ServerEvent,
+  SyncResponse,
+} from '@shared/protocol'
+import { ApiError, type ApiClient } from './client'
+
+/** One server response, reduced to what is new: the store hands these to the presenter. */
+export interface Step {
+  /** Events not delivered before, oldest first. */
+  events: ServerEvent[]
+  /** The state after these events; absent when it hasn't changed. */
+  view?: PlayerView
+  version?: number
+  status: GameStatus
+  players: PlayerInfo[]
+  serverTime: number
+}
+
+export type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'paused'
+
+export interface GameTransport {
+  /** Starts syncing. With a cursor (just created or joined) events after it are replayed; without
+   * one (a reload) the client snaps to the current state. */
+  start(cursor?: number): void
+  stop(): void
+  /** Sends a move for hand `hand`. Resolves once its response has been delivered as a step. */
+  send(action: ClientAction, hand: number): Promise<void>
+  onStep(listener: (step: Step) => void): () => void
+  onConnection(listener: (state: ConnectionState) => void): () => void
+  /** The server says the game is gone or the seat's token is wrong: syncing has stopped. */
+  onFatal(listener: (error: ApiError) => void): () => void
+  /** Polls very often while on (WebRTC signalling, P5.4). */
+  setBoost(on: boolean): void
+  /**
+   * The user did something: go back to the active polling intervals. Polls at once if polling
+   * had slowed down (idle, hidden tab, error backoff), at most once a second however many taps
+   * there are. At an active rate the next poll is already close, and in a finished game there
+   * is nothing to hurry for, so nothing extra is sent.
+   */
+  nudge(): void
+  /** Starts polling again after a pause. */
+  resume(): void
+}
+
+/** Polling intervals in milliseconds. */
+export const POLL = {
+  waiting: 1000,
+  myMove: 2500,
+  boost: 300,
+  hidden: 15_000,
+  ended: 15_000,
+  /** Idle backoff: after this long without any change, poll at that interval. */
+  idle: [
+    { after: 10 * 60_000, every: 30_000 },
+    { after: 5 * 60_000, every: 15_000 },
+    { after: 2 * 60_000, every: 5_000 },
+  ],
+  /** Keep polling a finished game this long (so the last moves and chat arrive), then pause. */
+  endedFor: 10 * 60_000,
+  errorBase: 1000,
+  errorMax: 30_000,
+  /** Consecutive failures before the connection counts as offline rather than reconnecting. */
+  offlineAfter: 3,
+} as const
+
+/** What the transport needs from the environment, injectable for tests. */
+export interface TransportEnv {
+  now(): number
+  setTimer(fn: () => void, ms: number): unknown
+  clearTimer(id: unknown): void
+  random(): number
+  isHidden(): boolean
+  onVisibilityChange(fn: () => void): () => void
+  /** Calls `fn` when the browser says the network is back. Returns a function to stop. */
+  onOnline(fn: () => void): () => void
+}
+
+export function browserEnv(): TransportEnv {
+  return {
+    now: () => Date.now(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+    random: () => Math.random(),
+    isHidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+    onVisibilityChange(fn) {
+      if (typeof document === 'undefined') return () => {}
+      document.addEventListener('visibilitychange', fn)
+      return () => document.removeEventListener('visibilitychange', fn)
+    },
+    onOnline(fn) {
+      if (typeof window === 'undefined') return () => {}
+      window.addEventListener('online', fn)
+      return () => window.removeEventListener('online', fn)
+    },
+  }
+}
+
+const ENDED: GameStatus[] = ['finished', 'abandoned']
+
+/** True when this view has something for its player to do. */
+export function isMyMove(view: PlayerView | undefined): boolean {
+  const legal = view?.legal
+  return (
+    !!legal && (legal.discard || legal.cut || legal.go || legal.ready || legal.playable.length > 0)
+  )
+}
+
+export class PollingTransport implements GameTransport {
+  private readonly env: TransportEnv
+  private cursor: number | undefined
+  /** Highest event id handed out, so no event is ever delivered twice. */
+  private delivered = 0
+  private version: number | undefined
+  private view: PlayerView | undefined
+  private status: GameStatus = 'waiting'
+  private stopped = true
+  private paused = false
+  private boost = false
+  private failures = 0
+  private timer: unknown = null
+  /** How long the waiting timer was set for; null when no timer is waiting. */
+  private pendingDelay: number | null = null
+  private lastChange = 0
+  private lastActivity = 0
+  /** When activity last caused a poll, so a burst of taps is one request. */
+  private lastNudgePoll = Number.NEGATIVE_INFINITY
+  private endedAt: number | null = null
+  /** Requests run one at a time, in order: polls and moves never overlap. */
+  private queue: Promise<unknown> = Promise.resolve()
+  /** True from the moment a poll is queued until it has finished: polls never pile up. */
+  private pollQueued = false
+  private unwatch: (() => void)[] = []
+  private readonly stepListeners = new Set<(step: Step) => void>()
+  private readonly connectionListeners = new Set<(state: ConnectionState) => void>()
+  private readonly fatalListeners = new Set<(error: ApiError) => void>()
+
+  constructor(
+    private readonly api: ApiClient,
+    private readonly code: string,
+    private readonly token: string,
+    env: Partial<TransportEnv> = {},
+  ) {
+    this.env = { ...browserEnv(), ...env }
+  }
+
+  start(cursor?: number): void {
+    this.stopped = false
+    this.paused = false
+    this.cursor = cursor
+    this.delivered = cursor ?? 0
+    this.lastChange = this.lastActivity = this.env.now()
+    this.unwatchAll()
+    this.unwatch = [
+      // Looking at the tab again, or the network coming back: poll now, not at the slow rate.
+      this.env.onVisibilityChange(() => {
+        if (!this.env.isHidden()) this.nudge()
+      }),
+      this.env.onOnline(() => this.nudge()),
+    ]
+    this.setConnection('connecting')
+    this.schedule(0)
+  }
+
+  stop(): void {
+    this.stopped = true
+    this.clearTimer()
+    this.unwatchAll()
+  }
+
+  private unwatchAll(): void {
+    for (const off of this.unwatch) off()
+    this.unwatch = []
+  }
+
+  send(action: ClientAction, hand: number): Promise<void> {
+    if (this.paused) this.resume()
+    else this.nudge()
+    return this.exclusive(async () => {
+      if (this.stopped) throw new ApiError(0, 'network', 'Not connected.')
+      const res = await this.api.act(this.code, this.token, {
+        action,
+        hand,
+        cursor: this.cursor ?? 0,
+        v: this.version ?? 0,
+      })
+      if (this.stopped) return // left the game meanwhile: nobody is listening
+      this.absorb(res)
+      this.schedule(0) // confirm straight away
+    }).catch((err: unknown) => {
+      if (this.stopped) throw err
+      if (err instanceof ApiError && err.isTerminal) this.fail(err)
+      else this.schedule(0) // resync whatever happened
+      throw err
+    })
+  }
+
+  onStep(listener: (step: Step) => void) {
+    this.stepListeners.add(listener)
+    return () => this.stepListeners.delete(listener)
+  }
+
+  onConnection(listener: (state: ConnectionState) => void) {
+    this.connectionListeners.add(listener)
+    return () => this.connectionListeners.delete(listener)
+  }
+
+  onFatal(listener: (error: ApiError) => void) {
+    this.fatalListeners.add(listener)
+    return () => this.fatalListeners.delete(listener)
+  }
+
+  setBoost(on: boolean): void {
+    this.boost = on
+    if (on) this.schedule(0)
+  }
+
+  nudge(): void {
+    const now = this.env.now()
+    this.lastActivity = now
+    if (this.stopped || this.paused) return
+    // No timer: a request is in flight, and the delay after it will already count this
+    // activity. A short timer: the next poll is a moment away. Either way, an extra request
+    // for every tap or key press would only add load.
+    if (this.pendingDelay === null || this.pendingDelay <= POLL.myMove) return
+    // A finished game is polled slowly on purpose: reading the result is not a reason to ask
+    // the server again. Otherwise poll now, but only once for a burst of taps or key presses
+    // (the delay after an ended or failed poll is long again, so each one would qualify).
+    if (this.endedAt !== null || now - this.lastNudgePoll < POLL.waiting) return
+    this.lastNudgePoll = now
+    this.schedule(0)
+  }
+
+  resume(): void {
+    if (this.stopped) return
+    this.paused = false
+    if (this.endedAt !== null) this.endedAt = this.env.now()
+    this.lastActivity = this.env.now()
+    this.setConnection('connecting')
+    this.schedule(0)
+  }
+
+  /** How long to wait before the next poll, or null to pause. */
+  nextDelay(): number | null {
+    const now = this.env.now()
+    if (this.boost) return POLL.boost
+    if (this.endedAt !== null) return now - this.endedAt >= POLL.endedFor ? null : POLL.ended
+    const idle = now - Math.max(this.lastChange, this.lastActivity)
+    const step = POLL.idle.find((s) => idle >= s.after)
+    // A hidden tab polls slowly, and never faster than an idle visible one would.
+    if (this.env.isHidden()) return Math.max(POLL.hidden, step?.every ?? 0)
+    if (step) return step.every
+    return isMyMove(this.view) ? POLL.myMove : POLL.waiting
+  }
+
+  private async poll(): Promise<void> {
+    // One poll at a time, queued or running. Without this, a poll asked for while another
+    // waits behind a slow request would leave two chains of polls running back to back.
+    if (this.stopped || this.paused || this.pollQueued) return
+    this.pollQueued = true
+    try {
+      await this.exclusive(async () => {
+        if (this.stopped || this.paused) return
+        const res = await this.api.sync(this.code, this.token, {
+          cursor: this.cursor,
+          v: this.version,
+        })
+        if (this.stopped) return // stopped while the request was out: drop the answer
+        this.absorb(res)
+        this.failures = 0
+        this.setConnection('online')
+        this.schedule(res.more ? 0 : this.nextDelay())
+      })
+    } catch (err) {
+      if (this.stopped) return
+      const error = err instanceof ApiError ? err : new ApiError(0, 'network', String(err))
+      if (error.isTerminal) return this.fail(error)
+      this.failures++
+      this.setConnection(this.failures >= POLL.offlineAfter ? 'offline' : 'reconnecting')
+      const backoff = Math.min(POLL.errorMax, POLL.errorBase * 2 ** (this.failures - 1))
+      this.schedule(backoff * (0.5 + this.env.random() * 0.5))
+    } finally {
+      this.pollQueued = false
+    }
+  }
+
+  /** Folds a response into the transport's state and hands what is new to the listeners. */
+  private absorb(res: SyncResponse): void {
+    const events = res.events.filter((e) => e.id > this.delivered)
+    if (events.length) this.delivered = (events.at(-1) as ServerEvent).id
+    this.cursor = Math.max(this.cursor ?? 0, res.cursor)
+    // A view older than the one already held (stale or out-of-order) is ignored.
+    const fresh =
+      res.view !== undefined && (this.version === undefined || (res.version ?? 0) >= this.version)
+    const view = fresh ? res.view : undefined
+    if (view) {
+      if (res.version !== this.version) this.lastChange = this.env.now()
+      this.view = view
+      this.version = res.version
+    }
+    if (events.length) this.lastChange = this.env.now()
+    this.status = res.status
+    if (!ENDED.includes(res.status))
+      this.endedAt = null // e.g. a rematch: active again
+    else if (this.endedAt === null) this.endedAt = this.env.now()
+    const step: Step = {
+      events,
+      ...(view ? { view, version: res.version } : {}),
+      status: res.status,
+      players: res.players,
+      serverTime: res.serverTime,
+    }
+    // The cursor has moved on, so this step will not come again: one listener failing must
+    // not keep it from the others, or be mistaken for a failed request.
+    for (const listener of this.stepListeners) {
+      try {
+        listener(step)
+      } catch (err) {
+        console.error('A step listener failed', err)
+      }
+    }
+  }
+
+  private schedule(delay: number | null): void {
+    this.clearTimer()
+    if (this.stopped) return
+    if (delay === null) {
+      this.paused = true
+      this.setConnection('paused')
+      return
+    }
+    this.pendingDelay = delay
+    this.timer = this.env.setTimer(() => {
+      this.timer = null
+      this.pendingDelay = null
+      void this.poll()
+    }, delay)
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== null) this.env.clearTimer(this.timer)
+    this.timer = null
+    this.pendingDelay = null
+  }
+
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task)
+    this.queue = run.catch(() => undefined)
+    return run
+  }
+
+  private fail(error: ApiError): void {
+    this.stop()
+    for (const listener of this.fatalListeners) listener(error)
+  }
+
+  private setConnection(state: ConnectionState): void {
+    for (const listener of this.connectionListeners) listener(state)
+  }
+}

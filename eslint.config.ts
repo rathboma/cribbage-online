@@ -38,7 +38,14 @@ export default defineConfigWithVueTs(
     files: ['**/*.{ts,mts,vue}'],
   },
 
-  globalIgnores(['**/dist/**', '**/coverage/**', '**/.wrangler/**', '.claude/**']),
+  globalIgnores([
+    '**/dist/**',
+    '**/coverage/**',
+    '**/.wrangler/**',
+    '.claude/**',
+    'test-results/**',
+    'playwright-report/**',
+  ]),
 
   js.configs.recommended,
   ...pluginVue.configs['flat/essential'],
@@ -104,6 +111,56 @@ export default defineConfigWithVueTs(
           patterns: [
             { regex: '^zod(/|$)', message: zodMessage },
             { regex: 'protocol/schemas', message: zodMessage },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    // The HUD is shared by the simple table and the 3D table, so it must not know either;
+    // and a table must work under any HUD. GameScreen is where they meet.
+    name: 'app/hud-and-table-stay-apart',
+    files: ['src/components/hud/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { regex: '^zod(/|$)', message: zodMessage },
+            { regex: 'protocol/schemas', message: zodMessage },
+            {
+              regex: '(^|/)(table|three)(/|$)',
+              message: 'The HUD must not import from a table. Wire them together in GameScreen.',
+            },
+            {
+              regex: '(^|/)stores(/|$)',
+              message: 'The HUD is given what is on screen as props. GameScreen reads the store.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  {
+    name: 'app/table-does-not-import-hud',
+    files: ['src/components/table/**/*.{ts,vue}', 'src/three/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { regex: '^zod(/|$)', message: zodMessage },
+            { regex: 'protocol/schemas', message: zodMessage },
+            {
+              regex: '(^|/)hud(/|$)',
+              message: 'A table must not import from the HUD. Wire them together in GameScreen.',
+            },
+            {
+              regex: '(^|/)stores(/|$)',
+              message: 'A table is given what is on screen as props. GameScreen reads the store.',
+            },
           ],
         },
       ],

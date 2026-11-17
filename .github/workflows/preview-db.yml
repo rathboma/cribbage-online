@@ -1,0 +1,70 @@
+name: Preview database
+
+# Cloudflare builds each pull request as a Preview bound to the shared cribbage-preview D1
+# database (see `previews` in wrangler.jsonc), but no Cloudflare build applies migrations to it.
+# This workflow does, whenever a pull request adds or changes a migration. Applying is
+# idempotent: only migrations the database has not seen yet are run.
+#
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+# - CLOUDFLARE_API_TOKEN: a Cloudflare API token with Account → D1 → Edit
+# - CLOUDFLARE_ACCOUNT_ID: the account that owns the database
+# Without them the job passes with a warning and changes nothing. After adding them, re-run this
+# workflow's job on the pull request.
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'wrangler.preview-migrations.jsonc'
+      - '.github/workflows/preview-db.yml'
+  workflow_dispatch:
+
+# One migration run at a time for the shared database, and a newer push never cancels one that
+# has started (a half-applied migration is worse than a late one).
+concurrency:
+  group: preview-database
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    name: Apply migrations to the Preview database
+    # Pull requests from forks get no secrets, and must not reach the database anyway.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check for Cloudflare credentials
+        id: credentials
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning title=Preview database not migrated::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets, then re-run this job."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.credentials.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        if: steps.credentials.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      - name: Install dependencies
+        if: steps.credentials.outputs.ready == 'true'
+        run: yarn install --frozen-lockfile
+
+      - name: Apply migrations
+        if: steps.credentials.outputs.ready == 'true'
+        run: npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc

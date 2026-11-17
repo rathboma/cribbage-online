@@ -36,4 +36,21 @@
   "observability": {
     "enabled": true,
   },
+  // Pull-request branches are built by Cloudflare as Previews (`wrangler preview`), which get only
+  // what is listed here, never the production settings above. All Previews share one database of
+  // their own, cribbage-preview, so they never touch production data. Its migrations are applied
+  // with wrangler.preview-migrations.jsonc (see README "Deployment"), not automatically.
+  "previews": {
+    "vars": {
+      "ENVIRONMENT": "preview",
+    },
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "cribbage-preview",
+        "database_id": "e5cd0734-c01b-4733-aea6-237e334d6908",
+        "migrations_dir": "migrations",
+      },
+    ],
+  },
 }

@@ -1,7 +1,7 @@
 // Client unit tests: run by Vitest in jsdom.
 {
   "extends": "./tsconfig.app.json",
-  "include": ["env.d.ts", "src/**/*.test.ts"],
+  "include": ["env.d.ts", "src/**/*.test.ts", "src/test/**/*.ts"],
   "exclude": [],
   "compilerOptions": {
     "types": ["node"],
