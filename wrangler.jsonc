@@ -37,13 +37,20 @@
     "enabled": true,
   },
   // Pull-request branches are built by Cloudflare as Previews (`wrangler preview`), which get only
-  // the bindings listed here, never the production ones above. So a Preview has no database: the
-  // site loads, but games can't be started there (the API answers 503 or 500). To give Previews
-  // a database of their own, create one and add it here with its id, then apply the migrations to
-  // it (see README "Deployment").
+  // what is listed here, never the production settings above. All Previews share one database of
+  // their own, cribbage-preview, so they never touch production data. Its migrations are applied
+  // with wrangler.preview-migrations.jsonc (see README "Deployment"), not automatically.
   "previews": {
     "vars": {
       "ENVIRONMENT": "preview",
     },
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "cribbage-preview",
+        "database_id": "e5cd0734-c01b-4733-aea6-237e334d6908",
+        "migrations_dir": "migrations",
+      },
+    ],
   },
 }
