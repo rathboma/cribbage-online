@@ -1,0 +1,5 @@
+# Cloudflare static-asset headers (https://developers.cloudflare.com/workers/static-assets/headers/).
+# Card art rarely changes but its filenames are not versioned, so cache for a day and
+# serve the cached copy while revalidating for a week after that.
+/cards/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800

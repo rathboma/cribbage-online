@@ -13,8 +13,10 @@ Taken from the SVG collection maintained at
 > jurisdictions where the public domain is not a recognized legal concept.
 
 Changes made here, by `scripts/optimize-card-svgs.py`: editor metadata removed,
-path coordinates rounded to 2 decimal places, files renamed to the engine's
-card ids (`10H.svg` → `TH.svg`), and the jokers left out.
+path coordinates rounded to 2 decimal places and other geometry to 4, a
+`sans-serif` fallback added to the corner-index fonts, files renamed to the
+engine's card ids (`10H.svg` → `TH.svg`), and the jokers left out. The script's
+docstring lists every change.
 
 ## Card back (`back.svg`)
 
