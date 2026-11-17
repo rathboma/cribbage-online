@@ -48,12 +48,17 @@ export default defineConfig(async () =>
                       wrangler.d1_databases[0]?.migrations_dir ?? 'migrations',
                     ),
                   },
-                  // On Pages, requests no Function handles fall through to static assets. Server
-                  // tests don't serve the client, so stand in a 404. (buildPagesASSETSBinding
-                  // would work too, but its file watcher stops Vitest exiting when this project
-                  // is filtered out with --project.)
+                  // Server tests don't serve the client: a stand-in for the static assets that
+                  // has only the app's index.html, at /. (buildPagesASSETSBinding would work too,
+                  // but its file watcher stops Vitest exiting when this project is filtered out
+                  // with --project.)
                   serviceBindings: {
-                    ASSETS: () => new Response('No static assets in server tests', { status: 404 }),
+                    ASSETS: (request: Request) =>
+                      new URL(request.url).pathname === '/'
+                        ? new Response('<!doctype html><title>app shell</title>', {
+                            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                          })
+                        : new Response('No such file in server tests', { status: 404 }),
                   },
                 },
               }),

@@ -43,4 +43,3 @@ yarn-error.log*
 
 # Local agent worktrees
 .claude/worktrees/
-__pycache__/

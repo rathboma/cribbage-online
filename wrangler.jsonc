@@ -15,9 +15,12 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    // Deep links such as /j/BCDFG load the app; the client router shows its own "not found".
-    "not_found_handling": "single-page-application",
-    // Only API requests reach the Worker; everything else is served straight from the assets.
+    // A path that matches no file goes to the Worker (functions/[[path]].ts): deep links such
+    // as /j/BCDFG get index.html, and a missing file gets a real 404. Cloudflare's own
+    // "single-page-application" fallback would answer a missing /assets/ file with index.html,
+    // which browsers would then cache for a year (public/_headers).
+    "not_found_handling": "none",
+    // API requests always reach the Worker; files are served straight from the assets.
     "run_worker_first": ["/api/*"],
   },
   // Overridden locally by .dev.vars. Only "development" and "test" allow TEST_SEED.

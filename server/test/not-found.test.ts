@@ -13,3 +13,30 @@ describe('unknown /api routes', () => {
     expect(await res.json()).toMatchObject({ error: { code: 'not_found' } })
   })
 })
+
+describe('paths that match no file', () => {
+  it.each(['/j/BCDFG', '/g/BCDFG', '/new', '/no/such/page'])(
+    '%s is a page of the app: it gets index.html',
+    async (path) => {
+      const res = await exports.default.fetch(`http://localhost${path}`)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('text/html')
+      expect(await res.text()).toContain('app shell')
+    },
+  )
+
+  it.each(['/assets/index-0ldHash.js', '/assets/KC-0ldHash.png', '/favicon.ico', '/robots.txt'])(
+    '%s looks like a file: a 404 that is never cached, not the app shell',
+    async (path) => {
+      const res = await exports.default.fetch(`http://localhost${path}`)
+      expect(res.status).toBe(404)
+      expect(res.headers.get('cache-control')).toBe('no-store')
+      expect(await res.text()).not.toContain('app shell')
+    },
+  )
+
+  it('only serves pages to GET and HEAD', async () => {
+    const res = await exports.default.fetch('http://localhost/g/BCDFG', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+})

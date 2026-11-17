@@ -26,7 +26,9 @@
     "e2e:serve": "sh scripts/e2e-serve.sh",
     "db:migrate:local": "wrangler d1 migrations apply cribbage --local",
     "deploy": "sh scripts/deploy.sh",
-    "bot:play": "tsx scripts/bot-play.ts"
+    "bot:play": "tsx scripts/bot-play.ts",
+    "cards:optimize": "tsx scripts/optimize-cards.ts",
+    "cards:compare": "tsx scripts/compare-cards.ts"
   },
   "dependencies": {
     "@vue/devtools-api": "^8.2.1",
@@ -56,6 +58,8 @@
     "jsdom": "^31.0.1",
     "npm-run-all2": "^9.0.4",
     "prettier": "^3.10.1",
+    "sharp": "0.34.5",
+    "svgo": "4.1.0",
     "tsx": "^4.23.15",
     "typescript": "~6.0.0",
     "typescript-eslint": "^8.72.2",
