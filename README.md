@@ -123,20 +123,18 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
   [Preview](https://developers.cloudflare.com/workers/previews/): the build command, then the
   Preview command (`npx wrangler preview` by default; Settings → Build). Previews inherit nothing
   from production: a Preview gets only what the `previews` section of `wrangler.jsonc` lists, and
-  without that section the build fails. It sets `ENVIRONMENT=preview` and gives Previews **no
-  database**, so a Preview never touches production data: the site loads, but games can't be
-  started there. Preview URLs are public unless you put Cloudflare Access in front of them.
-- **Playable Previews** need a database of their own, shared by all Previews
-  ([docs](https://developers.cloudflare.com/workers/previews/resources/)):
-  1. Create it: `npx wrangler d1 create cribbage-preview`.
-  2. Add it to `previews` in `wrangler.jsonc`, with the id that command printed:
-     `"d1_databases": [{ "binding": "DB", "database_name": "cribbage-preview", "database_id": "<id>", "migrations_dir": "migrations" }]`.
-  3. Add a `wrangler.preview-migrations.jsonc` that declares the same database at the top level
-     (`"name": "cribbage-online"`, and `d1_databases` with binding `PREVIEW_DB`, the same name
-     and id, and `"migrations_dir": "migrations"`), so wrangler's D1 commands can reach it.
-  4. Apply the migrations, once, and again whenever a branch adds one:
-     `npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc`.
-     Nothing runs this automatically, and every Preview shares this database's rows.
+  without that section the build fails. It sets `ENVIRONMENT=preview` and binds `DB` to
+  `cribbage-preview`, one D1 database shared by all Previews, so a Preview never touches
+  production data (but Previews see each other's games). Preview URLs are public unless you put
+  Cloudflare Access in front of them.
+- **Preview database migrations** are applied by GitHub Actions, not by Cloudflare: the
+  "Preview database" workflow (`.github/workflows/preview-db.yml`) runs whenever a pull request
+  adds or changes a migration, and applies whatever the database hasn't seen yet. It needs two
+  repository secrets: `CLOUDFLARE_API_TOKEN` (a Cloudflare API token with Account → D1 → Edit)
+  and `CLOUDFLARE_ACCOUNT_ID`; without them it passes with a warning and does nothing. By hand:
+  `npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc`
+  (`wrangler.preview-migrations.jsonc` exists only so wrangler's D1 commands can reach the
+  Preview database; [docs](https://developers.cloudflare.com/workers/previews/resources/)).
 - **Node:** builds need Node 24 (`.nvmrc`).
 
 ### Folder layout
