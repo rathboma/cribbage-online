@@ -31,6 +31,8 @@ yarn dev          # app at http://localhost:5173, API at /api (local D1)
 | `yarn e2e`              | End-to-end tests: two real browsers play against the built Worker (see below)    |
 | `yarn db:migrate:local` | Apply new files in `migrations/` to the local D1 database                        |
 | `yarn bot:play`         | Two bots play a whole game against a running `yarn dev` (`--url`, `--seed`)      |
+| `yarn cards:optimize`   | Rebuild the card faces in `src/assets/cards/` from the upstream SVGs (see below) |
+| `yarn cards:compare`    | Compare two sets of card faces, pixel by pixel, at 500 px wide                   |
 | `yarn deploy`           | Migrate the production D1 database and deploy the Worker (see Deployment)        |
 
 Before pushing, run `yarn lint && yarn typecheck && yarn test && yarn build`. CI
@@ -59,6 +61,11 @@ whatever the UI offers. The first time, install the browser with
   cards and a failed run cannot be replayed. Tests must not rely on particular cards: they press
   what the UI offers. (The test that needs a Go plays the highest card first until one comes up,
   which the engine's simulator puts at 93% of hands.)
+- **The 3D table on its own.** `e2e/scene.spec.ts` (the `scene` project) tests the three.js
+  scene at `/dev/table` with real WebGL: no frames while idle, no distortion on resize, nothing
+  left behind after mounting and unmounting it 20 times, recovery from a lost context. That page
+  only exists in development builds, so Playwright also starts a Vite dev server for it (port
+  5199). `yarn e2e:scene` runs just these, without building the Worker.
 - **Looking into a failure.** In CI the report is attached to the run as `playwright-report`,
   with a screenshot and a trace of the first failure of each failed test, including one that
   then passed on its retry. Locally, add `--trace on` and open the trace it prints.
@@ -81,9 +88,14 @@ account is needed for development.
   automatically.
 - **Config** is in `wrangler.jsonc`. The D1 binding is `DB` (database `cribbage`). It has no
   `database_id`: wrangler finds the database by name, and the first deploy creates it.
-- **Routing.** Requests for `/api/*` go to the Worker; everything else is a static file, and any
-  other path (a deep link such as `/j/BCDFG`) gets the app's `index.html`, whose router shows its
-  own "not found" page.
+- **Routing.** Requests for `/api/*` go to the Worker. Anything else is served from `dist/` if
+  the file exists; if not, the Worker answers (`functions/[[path]].ts`): a page of the app (a deep
+  link such as `/j/BCDFG`) gets `index.html`, whose router shows its own "not found" page, and a
+  path that looks like a file gets a plain 404.
+- **Caching.** Files under `/assets/` have a hash of their contents in their names, so
+  `public/_headers` lets browsers keep them for a year; `index.html` is checked on every visit.
+  That is why a missing file must be a real 404: Cloudflare's own single-page fallback would
+  answer it with `index.html`, which browsers would then keep under that URL.
 - **Local data** lives in `.wrangler/state/` (git-ignored). Delete that folder to start from an empty
   database.
 - **Migrations** are numbered SQL files in `migrations/` (`0001_create_games.sql`, ...). Create one
@@ -150,6 +162,23 @@ Cloudflare builds and deploys the Worker from this repository (Workers Builds).
 
 Client code imports through two aliases: `@/` for `src/` and `@shared/` for `shared/`. Code in
 `shared/`, `functions/` and `server/` uses relative imports instead (lint enforces this).
+
+**Card art** is in `src/assets/cards/`: Byron Knoll's public-domain faces (credits and every
+change made to them in `CREDITS.md` there) and an original back. Import URLs from
+`src/game/cardArt.ts`, never by path: Vite adds a content hash to each file name. The faces are
+generated, so don't edit them by hand; rebuild them from
+[notpeter/Vector-Playing-Cards](https://github.com/notpeter/Vector-Playing-Cards) (commit
+`861b338`) with `yarn cards:optimize <its cards-svg folder>`, which needs Playwright's Chromium.
+Aces and number cards stay SVG; the court cards are too detailed for that and become 500 px wide
+PNGs. The corner indices are drawn as outlines (in Arimo), so no card depends on a font. A unit test holds the set to the download budget (1 MB gzipped, no file over 150 KB), and
+`yarn cards:compare <old> <new>` shows whether a change is visible.
+
+**The 3D table** (Phase 4) lives in `src/three/` as plain TypeScript classes with no Vue in them;
+`components/table/GameTable.vue` owns the canvas. It only draws a frame when something has
+changed or is moving, and every animation goes through `src/three/anim.ts`, whose clock moves
+only when told to, so animation logic is unit-tested without a browser. While `yarn dev` runs,
+http://localhost:5173/dev/table shows the table on its own (development builds only). The build
+fails if three.js would load with the landing page or a dev page would ship (`vite.config.ts`).
 
 Unit tests sit next to the code they test as `*.test.ts`. Tests under `shared/` run in Node,
 tests under `src/` in jsdom, and tests under `server/` in the Workers runtime.
