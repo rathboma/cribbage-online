@@ -159,23 +159,25 @@ function mapPart(uv: BufferAttribute, part: { start: number; count: number }, re
 }
 
 export interface FlipOptions {
-  /** Which way up the card ends; by default, the other way from now. */
+  /** Which way up the card ends; by default, the other way from when the flip starts. */
   faceUp?: boolean
   /**
-   * The face to show, set at the moment the card is edge-on so it is never seen before it is
-   * revealed. Null clears it (for a card turned down that the viewer may no longer know).
-   * Left out, the face stays as it is.
+   * The face to show, set the moment the side the card is turning to comes into view, so a
+   * face is never seen before it is revealed. Null clears it (for a card turned down whose face
+   * the viewer may no longer know). Left out, the face stays as it is.
    */
   face?: CardId | null
   /** Milliseconds. */
   duration?: number
-  /** How high the card rises while it turns, in world units: enough to clear the table. */
+  /** How high the card rises at the top of a full turn, in world units. */
   lift?: number
 }
 
 export const FLIP_DURATION = 420
 /** Half a card's width, so its edge never dips into the table, and a little more. */
 export const FLIP_LIFT = CARD_WIDTH * 0.6
+/** However a flip starts, the card stays this high over the table for the angle it is at. */
+const CLEARANCE = CARD_WIDTH / 2 + CARD_THICKNESS
 
 /**
  * The angle that shows the same side as `goal` (0 front up, π face down) nearest to `from`,
@@ -196,10 +198,13 @@ export class CardMesh extends Object3D {
   private currentFace: CardId | null = null
   private frontUp = false
   /**
-   * Counts turns of the card (flips, setFaceUp, going back to the pool). A flip only finishes
-   * while it is the latest, so the newest instruction wins, as it does for tweens.
+   * Counts turns of the card (flips, setFaceUp, going back to the pool). A flip moves the card
+   * only while it is the latest, so the newest instruction wins, as it does for tweens.
    */
   private turns = 0
+  private uses = 0
+  /** The face the flip in progress shows once the side it turns to comes up; undefined if none. */
+  private pendingFace: CardId | null | undefined = undefined
 
   constructor(
     material: Material,
@@ -234,6 +239,15 @@ export class CardMesh extends Object3D {
     return this.frontUp
   }
 
+  /**
+   * Goes up each time the card goes back to the pool. Steps scheduled to act on a card (in the
+   * animation director's timelines, say) should note it when they are built and do nothing if
+   * it has changed by the time they run: the card is then someone else's. Flips do this.
+   */
+  get generation(): number {
+    return this.uses
+  }
+
   /** Shows this card on the front, or the blank face for null. */
   setFace(face: CardId | null): void {
     this.currentFace = face
@@ -242,9 +256,10 @@ export class CardMesh extends Object3D {
     uv.needsUpdate = true
   }
 
-  /** Turns the card front up or down at once, ending any flip in progress. */
+  /** Turns the card front up or down at once, ending any flip in progress, reveal and all. */
   setFaceUp(faceUp: boolean): void {
     this.turns++
+    this.pendingFace = undefined
     this.frontUp = faceUp
     this.body.rotation.z = faceUp ? 0 : Math.PI
     this.body.position.y = 0
@@ -252,36 +267,41 @@ export class CardMesh extends Object3D {
 
   /**
    * Turns the card over: it rises, rolls about its long axis and settles where it was. Returns
-   * the animation as a timeline, for the animator or a longer timeline.
+   * the animation as a timeline, for the animator or a longer one; it always lasts `duration`.
    *
-   * Which way up it ends is decided now (by default, the other way from `faceUp`), so build it
-   * just before playing it. If the card already lies, or is already turning, that way up, only
-   * the face changes, at once. Otherwise the newest instruction wins: a flip that starts while
-   * another is playing takes over from wherever the card is, and setFaceUp or returning the
-   * card to the pool stops a flip, reveal and all.
+   * Everything is decided when it starts playing, not when it is built, so flips can be queued
+   * on a timeline. If by then the card already lies, or is already turning, the asked way up,
+   * only the face changes: at once, or when the turn in progress brings that side up. Otherwise
+   * the newest instruction wins: a flip that starts while another plays takes over from
+   * wherever the card is, and setFaceUp or returning the card to the pool stops a flip, reveal
+   * and all, even one still waiting its turn on a timeline.
    */
   flip(options: FlipOptions = {}): Timeline {
-    const faceUp = options.faceUp ?? !this.frontUp
-    const reveal = () => {
-      if (options.face !== undefined) this.setFace(options.face)
-    }
-    if (faceUp === this.frontUp) return new Timeline().call(reveal)
-
     const duration = Math.max(0, options.duration ?? FLIP_DURATION)
     const lift = options.lift ?? FLIP_LIFT
+    const generation = this.uses
     const { body } = this
     // One tween drives the whole motion, so a flip that is no longer current moves nothing.
     const progress = { t: 0 }
     let turn = -1
+    let faceUp = false
     let fromAngle = 0
     let toAngle = 0
     let fromHeight = 0
-    const current = () => this.turns === turn
+    const current = () => this.uses === generation && this.turns === turn
     return new Timeline()
       .call(() => {
+        turn = -1
+        progress.t = 0
+        if (this.uses !== generation) return // the card has gone back to the pool since
+        faceUp = options.faceUp ?? !this.frontUp
+        if (faceUp === this.frontUp) {
+          if (options.face !== undefined) this.changeFace(options.face)
+          return
+        }
         turn = ++this.turns
         this.frontUp = faceUp
-        progress.t = 0
+        this.pendingFace = options.face
         fromAngle = body.rotation.z
         fromHeight = body.position.y
         toAngle = nearestTurn(fromAngle, faceUp ? 0 : Math.PI)
@@ -295,23 +315,55 @@ export class CardMesh extends Object3D {
           onUpdate: () => {
             if (!current()) return
             const t = progress.t
-            body.rotation.z = fromAngle + (toAngle - fromAngle) * ease.inOutCubic(t)
-            // Up and down again, highest when the card is edge-on.
-            body.position.y = fromHeight * (1 - t) + lift * 4 * t * (1 - t)
+            const angle = fromAngle + (toAngle - fromAngle) * ease.inOutCubic(t)
+            body.rotation.z = angle
+            // Up and down again, highest when edge-on; never lower than the turn needs, and
+            // coming down smoothly from wherever an earlier flip left it.
+            body.position.y = Math.max(
+              lift * 4 * t * (1 - t),
+              fromHeight * (1 - t),
+              CLEARANCE * Math.abs(Math.sin(angle)),
+            )
+            this.revealIfTurned()
           },
         },
         0,
       )
       .call(() => {
-        if (current()) reveal()
-      }, duration / 2)
-      .call(() => {
-        if (current()) this.setFaceUp(faceUp)
+        if (!current()) return
+        const face = this.pendingFace
+        this.setFaceUp(faceUp)
+        if (face !== undefined) this.setFace(face)
       }, duration)
   }
 
-  /** Back to how a new card starts: no face, face down, at the origin, nothing animating it. */
+  /** A face change asked for while the card is, or is turning, the right way up. */
+  private changeFace(face: CardId | null) {
+    if (this.pendingFace !== undefined || !this.showsTarget()) this.pendingFace = face
+    else this.setFace(face)
+    this.revealIfTurned()
+  }
+
+  /** True once the side the card is turning to faces up (or it is edge-on). */
+  private showsTarget(): boolean {
+    const upness = Math.cos(this.body.rotation.z)
+    return this.frontUp ? upness >= -1e-9 : upness <= 1e-9
+  }
+
+  /** Shows the pending face once the side the card is turning to has come up. */
+  private revealIfTurned() {
+    if (this.pendingFace === undefined || !this.showsTarget()) return
+    this.setFace(this.pendingFace)
+    this.pendingFace = undefined
+  }
+
+  /**
+   * Back to how a new card starts: no face, face down, at the origin, unnamed, and nothing
+   * animating it. Flips built for its previous use do nothing; tweens that have already started
+   * stop; other steps should check `generation`.
+   */
   reset(): void {
+    this.uses++
     stopTweensOf(this.position)
     stopTweensOf(this.rotation)
     stopTweensOf(this.scale)
@@ -322,6 +374,8 @@ export class CardMesh extends Object3D {
     this.rotation.set(0, 0, 0)
     this.scale.set(1, 1, 1)
     this.visible = true
+    this.name = 'card'
+    this.userData = {}
     this.setFace(null)
     this.setFaceUp(false)
   }

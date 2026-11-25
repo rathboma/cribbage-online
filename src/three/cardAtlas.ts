@@ -123,7 +123,7 @@ export function slotUv(layout: AtlasLayout, slot: AtlasSlot): UvRect {
 export interface AtlasCanvas {
   width: number
   height: number
-  getContext(type: '2d'): AtlasContext | null
+  getContext(type: '2d', settings?: CanvasRenderingContext2DSettings): AtlasContext | null
 }
 
 export type AtlasContext = Pick<
@@ -153,7 +153,7 @@ export type AtlasContext = Pick<
 
 export interface AtlasSources {
   createCanvas(width: number, height: number): AtlasCanvas
-  /** Loads and decodes an image; rejects if it can't. */
+  /** Loads an image, ready to draw; rejects if it can't. */
   loadImage(url: string): Promise<CanvasImageSource>
 }
 
@@ -167,9 +167,15 @@ export const browserSources: AtlasSources = {
   async loadImage(url) {
     const image = new Image()
     image.decoding = 'async'
-    image.src = url
-    // decode() rejects for an image that fails to load or can't be decoded.
-    await image.decode()
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error(`Could not load ${url}`))
+      image.src = url
+    })
+    // Decoded off the main thread where the browser can. Some browsers refuse to for an SVG,
+    // which then decodes when it is drawn instead, so a refusal is not a failure.
+    await image.decode().catch(() => {})
+    if (!image.naturalWidth) throw new Error(`${url} has no size`)
     return image
   },
 }
@@ -181,54 +187,125 @@ function artUrl(slot: AtlasSlot): string | null {
   return cardFaceUrl(slot)
 }
 
+/** How long an image may take before its slot counts as missing (it is still drawn if it comes). */
+export const IMAGE_TIMEOUT = 15_000
+
+export interface AtlasImageOptions {
+  /** Milliseconds before an image that hasn't arrived counts as missing. */
+  imageTimeout?: number
+}
+
 /**
  * The atlas canvas. Every cell holds its stand-in from the start; the card art replaces each
- * one as it arrives. `loaded` settles once every image has been drawn or has failed.
+ * one as it arrives. An image that fails keeps its stand-in, and so does one that takes too
+ * long, until it comes.
  */
 export class AtlasImage {
   readonly canvas: AtlasCanvas
-  /** Slots whose art could not be loaded: they keep their stand-in. */
-  readonly missing: AtlasSlot[] = []
-  /** Settles when every image has been drawn or has failed. Never rejects. */
+  /** Settles when every image has first been drawn, has failed or has timed out. Never rejects. */
   readonly loaded: Promise<void>
-  private done = false
+  /** Goes up every time art is drawn: textures compare it to know when to upload again. */
+  revision = 0
+  private readonly context: AtlasContext
+  private readonly failed = new Set<AtlasSlot>()
+  private readonly late = new Set<AtlasSlot>()
+  private readonly listeners = new Set<() => void>()
+  private unsettled = 0
+  private readonly timeout: number
 
   constructor(
     readonly layout: AtlasLayout,
-    sources: AtlasSources = browserSources,
+    private readonly sources: AtlasSources = browserSources,
+    options: AtlasImageOptions = {},
   ) {
+    this.timeout = options.imageTimeout ?? IMAGE_TIMEOUT
     const canvas = sources.createCanvas(layout.width, layout.height)
-    const context = canvas.getContext('2d')
+    // Kept in main memory rather than on the GPU: a GPU reset can blank an accelerated canvas,
+    // and this one is cached for every table to come.
+    const context = canvas.getContext('2d', { willReadFrequently: true })
     if (!context) throw new Error('The card atlas needs a 2D canvas, which is not available')
     this.canvas = canvas
+    this.context = context
     context.imageSmoothingEnabled = true
     context.imageSmoothingQuality = 'high'
     context.fillStyle = STOCK
     context.fillRect(0, 0, layout.width, layout.height)
     for (const slot of ATLAS_SLOTS) drawStandIn(context, slotPixels(layout, slot), slot)
+    this.loaded = Promise.all(ATLAS_SLOTS.map((slot) => this.load(slot))).then(() => {})
+  }
 
-    const loads = ATLAS_SLOTS.map(async (slot) => {
-      const url = artUrl(slot)
-      if (!url) return
-      try {
-        const image = await sources.loadImage(url)
-        const cell = slotPixels(layout, slot)
-        // The art has transparent corners: card stock goes under it, over the stand-in.
-        context.fillStyle = STOCK
-        context.fillRect(cell.x, cell.y, cell.width, cell.height)
-        context.drawImage(image, cell.x, cell.y, cell.width, cell.height)
-      } catch {
-        this.missing.push(slot)
+  /** No image is on its way any more (each has been drawn, has failed or is late). */
+  get complete(): boolean {
+    return this.unsettled === 0
+  }
+
+  /** Slots showing their stand-in because their art failed or hasn't come yet, in deck order. */
+  get missing(): AtlasSlot[] {
+    return ATLAS_SLOTS.filter((slot) => this.failed.has(slot) || this.late.has(slot))
+  }
+
+  /** Calls `listener` whenever an image is drawn, fails or times out. Returns an unsubscribe. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  /** Asks again for art that failed to load (not for late art, which is still on its way). */
+  retryFailed(): void {
+    for (const slot of [...this.failed]) {
+      this.failed.delete(slot)
+      void this.load(slot)
+    }
+  }
+
+  /** Loads one slot's art; settles when it is drawn, fails or times out. */
+  private load(slot: AtlasSlot): Promise<void> {
+    const url = artUrl(slot)
+    if (!url) return Promise.resolve()
+    this.unsettled++
+    return new Promise<void>((settle) => {
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        this.unsettled--
+        settle()
       }
-    })
-    this.loaded = Promise.all(loads).then(() => {
-      this.done = true
+      const timer = setTimeout(() => {
+        this.late.add(slot)
+        done()
+        this.notify()
+      }, this.timeout)
+      this.sources.loadImage(url).then(
+        (image) => {
+          clearTimeout(timer)
+          this.late.delete(slot)
+          this.draw(slot, image)
+          done()
+          this.notify()
+        },
+        () => {
+          clearTimeout(timer)
+          this.late.delete(slot)
+          this.failed.add(slot)
+          done()
+          this.notify()
+        },
+      )
     })
   }
 
-  /** Every image has been drawn or has failed. */
-  get complete(): boolean {
-    return this.done
+  private draw(slot: AtlasSlot, image: CanvasImageSource) {
+    const cell = slotPixels(this.layout, slot)
+    // The art has transparent corners: card stock goes under it, over the stand-in.
+    this.context.fillStyle = STOCK
+    this.context.fillRect(cell.x, cell.y, cell.width, cell.height)
+    this.context.drawImage(image, cell.x, cell.y, cell.width, cell.height)
+    this.revision++
+  }
+
+  private notify() {
+    for (const listener of [...this.listeners]) listener()
   }
 }
 
@@ -236,29 +313,44 @@ const cache = new Map<number, AtlasImage>()
 
 /**
  * The page's atlas canvas for a GPU with this texture size limit, drawn on first use and kept
- * for the life of the page, so a table that mounts again doesn't load the art again.
+ * for the life of the page, so a table that mounts again doesn't load the art again. Art that
+ * failed to load is asked for again each time.
  */
 export function cardAtlasImage(maxTextureSize: number): AtlasImage {
   const layout = atlasLayout(maxTextureSize)
   let image = cache.get(layout.artWidth)
   if (!image) cache.set(layout.artWidth, (image = new AtlasImage(layout)))
+  else image.retryFailed()
   return image
 }
+
+/**
+ * The longest the table waits before showing art that has arrived: images that come close
+ * together are uploaded together, as each upload sends the whole atlas to the GPU.
+ */
+export const UPLOAD_DELAY = 400
 
 export interface CardAtlasOptions {
   /** Anisotropic filtering, for cards seen at a glancing angle (1 turns it off). */
   anisotropy?: number
   /** Called when the texture has new content to draw: the scene redraws. */
   onChange?: () => void
+  /** Milliseconds to gather arriving art before uploading it. */
+  uploadDelay?: number
 }
 
 /**
- * One table's atlas texture. While the art is loading it shows the stand-ins; once every image
- * has settled it is uploaded again (once, not image by image: each upload is the whole atlas).
+ * One table's atlas texture. It shows the stand-ins at first and the art as it arrives: once
+ * every image has settled, or UPLOAD_DELAY after the first new one, whichever is sooner, so one
+ * slow image never holds back the rest.
  */
 export class CardAtlas {
   readonly texture: CanvasTexture
-  private disposed = false
+  private uploaded: number
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private readonly unsubscribe: () => void
+  private readonly onChange?: () => void
+  private readonly uploadDelay: number
 
   constructor(
     readonly image: AtlasImage,
@@ -272,20 +364,17 @@ export class CardAtlas {
     texture.magFilter = LinearFilter
     texture.anisotropy = Math.max(1, options.anisotropy ?? 1)
     this.texture = texture
-    if (!image.complete) {
-      void image.loaded.then(() => {
-        if (this.disposed) return
-        texture.needsUpdate = true
-        options.onChange?.()
-      })
-    }
+    this.uploaded = image.revision
+    this.onChange = options.onChange
+    this.uploadDelay = options.uploadDelay ?? UPLOAD_DELAY
+    this.unsubscribe = image.subscribe(() => this.artArrived())
   }
 
   get layout(): AtlasLayout {
     return this.image.layout
   }
 
-  /** True once all the card art has been drawn (or has failed and kept its stand-in). */
+  /** True once no card art is on its way (each image drawn, failed or late). */
   get loaded(): boolean {
     return this.image.complete
   }
@@ -296,8 +385,24 @@ export class CardAtlas {
 
   /** Releases the texture. The canvas stays cached for the next table. */
   dispose(): void {
-    this.disposed = true
+    this.unsubscribe()
+    if (this.timer !== null) clearTimeout(this.timer)
+    this.timer = null
     this.texture.dispose()
+  }
+
+  private artArrived() {
+    if (this.image.complete) this.upload()
+    else this.timer ??= setTimeout(() => this.upload(), this.uploadDelay)
+  }
+
+  private upload() {
+    if (this.timer !== null) clearTimeout(this.timer)
+    this.timer = null
+    if (this.image.revision === this.uploaded) return
+    this.uploaded = this.image.revision
+    this.texture.needsUpdate = true
+    this.onChange?.()
   }
 }
 

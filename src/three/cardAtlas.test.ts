@@ -130,6 +130,59 @@ describe('AtlasImage', () => {
     expect(image.complete).toBe(true)
   })
 
+  it('keeps its canvas in main memory, where a GPU reset cannot blank it', () => {
+    const fake = fakeAtlasSources()
+    void new AtlasImage(layout, fake.sources)
+    expect(fake.contextSettings).toEqual([{ willReadFrequently: true }])
+  })
+
+  it('does not let one slow image hold back the rest, and draws it if it comes', async () => {
+    const kc = cardFaceUrl('KC')
+    const fake = fakeAtlasSources({ hold: (url) => url === kc })
+    const listener = vi.fn()
+    const image = new AtlasImage(layout, fake.sources, { imageTimeout: 20 })
+    image.subscribe(listener)
+    await flush()
+    expect(image.complete).toBe(false)
+    expect(fake.drawnImages()).toHaveLength(52) // the rest are drawn already
+    expect(listener).toHaveBeenCalledTimes(52)
+    await image.loaded // once KC has timed out
+    expect(image.complete).toBe(true)
+    expect(image.missing).toEqual(['KC'])
+    const revision = image.revision
+    fake.releaseImages()
+    await flush()
+    expect(fake.drawnImages()).toContain(kc)
+    expect(image.missing).toEqual([])
+    expect(image.revision).toBe(revision + 1)
+    expect(listener).toHaveBeenCalledTimes(54) // 52, the timeout, and KC
+  })
+
+  it('asks again for art that failed when told to', async () => {
+    let broken = true
+    const fake = fakeAtlasSources({ fail: (url) => broken && url === cardFaceUrl('2H') })
+    const image = new AtlasImage(layout, fake.sources)
+    await image.loaded
+    expect(image.missing).toEqual(['2H'])
+    broken = false
+    image.retryFailed()
+    expect(image.complete).toBe(false)
+    await flush()
+    expect(image.complete).toBe(true)
+    expect(image.missing).toEqual([])
+    expect(fake.drawnImages()).toContain(cardFaceUrl('2H'))
+  })
+
+  it('stops telling a listener once it unsubscribes', async () => {
+    const fake = fakeAtlasSources({ hold: true })
+    const image = new AtlasImage(layout, fake.sources)
+    const listener = vi.fn()
+    image.subscribe(listener)()
+    fake.releaseImages()
+    await image.loaded
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('says so when there is no 2D canvas', () => {
     const fake = fakeAtlasSources()
     const sources = {
@@ -140,13 +193,41 @@ describe('AtlasImage', () => {
   })
 })
 
+/**
+ * An <img> as the browser would load it (jsdom loads no images): `load` fires for any URL
+ * not in `broken`, with a size, and decode() does what the test says.
+ */
+function fakeBrowserImages(options: { broken?: string[]; decode?: () => Promise<void> } = {}) {
+  const decode = vi.fn(options.decode ?? (() => Promise.resolve()))
+  // jsdom's Image is a factory that ignores subclasses, so the fake is a real <img> with its
+  // loading replaced.
+  function LoadingImage() {
+    const image = document.createElement('img')
+    let source = ''
+    Object.defineProperties(image, {
+      decode: { value: decode },
+      naturalWidth: { get: () => 500 },
+      src: {
+        get: () => source,
+        set: (url: string) => {
+          source = url
+          setTimeout(() => {
+            if (options.broken?.some((b) => url.endsWith(b))) image.onerror?.(new Event('error'))
+            else image.onload?.(new Event('load'))
+          }, 0)
+        },
+      },
+    })
+    return image
+  }
+  vi.stubGlobal('Image', LoadingImage)
+  return { decode }
+}
+
 describe('cardAtlasImage', () => {
-  // jsdom has no decode(); each test supplies its own.
-  const decode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode')
   afterEach(() => {
     vi.restoreAllMocks()
-    if (decode) Object.defineProperty(HTMLImageElement.prototype, 'decode', decode)
-    else delete (HTMLImageElement.prototype as Partial<HTMLImageElement>).decode
+    vi.unstubAllGlobals()
   })
 
   it('draws the atlas once per page, in a real canvas, with images from the card art', async () => {
@@ -155,11 +236,7 @@ describe('cardAtlasImage', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
       context as unknown as RenderingContext,
     )
-    const decode = vi.fn(() => Promise.resolve())
-    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
-      value: decode,
-      configurable: true,
-    })
+    const { decode } = fakeBrowserImages({ broken: [cardFaceUrl('9S')] })
 
     const image = cardAtlasImage(4096)
     expect(cardAtlasImage(8192)).toBe(image) // the same size of card: the same atlas
@@ -171,22 +248,32 @@ describe('cardAtlasImage', () => {
       image.layout.height,
     ])
     await Promise.all([image.loaded, smaller.loaded])
-    expect(image.missing).toEqual([])
+    expect(image.missing).toEqual(['9S'])
     const urls = fake.calls
       .filter((call) => call.method === 'drawImage')
       .map((call) => (call.args[0] as HTMLImageElement).src)
-    expect(urls).toHaveLength(53 + 53) // both atlases
-    expect(new Set(urls).size).toBe(53)
+    expect(urls).toHaveLength(52 + 52) // both atlases
+    expect(new Set(urls).size).toBe(52)
     expect(urls.some((url) => url.endsWith(cardFaceUrl('5D')))).toBe(true)
-    expect(decode).toHaveBeenCalledTimes(53 + 53) // two atlases
+    expect(decode).toHaveBeenCalledTimes(52 + 52)
+
+    // A table mounting again asks again for what failed.
+    fakeBrowserImages()
+    expect(cardAtlasImage(4096)).toBe(image)
+    expect(image.complete).toBe(false)
+    await new Promise((resolve) => image.subscribe(() => resolve(undefined)))
+    expect(image.missing).toEqual([])
   })
 
-  it('loads an image with decode(), which fails for a broken image', async () => {
-    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
-      value: () => Promise.reject(new Error('EncodingError')),
-      configurable: true,
-    })
-    await expect(browserSources.loadImage('/nope.svg')).rejects.toThrow(/EncodingError/)
+  it('takes an image the browser will not decode ahead of time, as some do with SVG', async () => {
+    fakeBrowserImages({ decode: () => Promise.reject(new Error('EncodingError')) })
+    const image = await browserSources.loadImage('/cards/AS.svg')
+    expect((image as HTMLImageElement).src).toMatch(/AS\.svg$/)
+  })
+
+  it('fails for an image that does not load', async () => {
+    fakeBrowserImages({ broken: ['/nope.svg'] })
+    await expect(browserSources.loadImage('/nope.svg')).rejects.toThrow(/Could not load/)
   })
 })
 
@@ -203,6 +290,40 @@ describe('CardAtlas', () => {
     expect(texture.minFilter).toBe(LinearMipmapLinearFilter)
     expect(texture.anisotropy).toBe(8)
     expect(atlas.uv('5H')).toEqual(slotUv(layout, '5H'))
+  })
+
+  it('uploads the art that has arrived after a short wait, without waiting for the rest', async () => {
+    const fake = fakeAtlasSources({ hold: true })
+    const onChange = vi.fn()
+    const atlas = new CardAtlas(new AtlasImage(layout, fake.sources), {
+      onChange,
+      uploadDelay: 20,
+    })
+    const version = atlas.texture.version
+    fake.releaseImages((url) => url !== cardFaceUrl('AD'))
+    await flush()
+    // Gathered first: 52 images, no upload yet...
+    expect(atlas.texture.version).toBe(version)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // ...then one upload for all of them.
+    expect(atlas.texture.version).toBe(version + 1)
+    expect(onChange).toHaveBeenCalledTimes(1)
+    // The last one completes the atlas and goes up at once.
+    fake.releaseImages()
+    await atlas.image.loaded
+    expect(atlas.texture.version).toBe(version + 2)
+    expect(onChange).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not upload again when nothing new was drawn', async () => {
+    const fake = fakeAtlasSources({ fail: () => true })
+    const onChange = vi.fn()
+    const atlas = new CardAtlas(new AtlasImage(layout, fake.sources), { onChange })
+    const version = atlas.texture.version
+    await atlas.image.loaded
+    await flush()
+    expect(atlas.texture.version).toBe(version)
+    expect(onChange).not.toHaveBeenCalled()
   })
 
   it('uploads again, once, when the art has loaded, and asks for a redraw', async () => {

@@ -323,7 +323,7 @@ describe('TableScene', () => {
   it('draws again when the card art has loaded', async () => {
     const { scene, frames, atlas } = setup()
     const cards = scene.cards
-    scene.table.add(cards.acquire('AS', true))
+    scene.table.add(cards.acquire({ face: 'AS', faceUp: true }))
     expect(frames.pending).toBe(0)
     atlas.releaseImages()
     await cards.atlas.image.loaded
@@ -332,9 +332,11 @@ describe('TableScene', () => {
   })
 
   it('releases the cards with everything else: the atlas texture, the material, every card', () => {
-    const { scene } = setup()
+    const { scene, renderer } = setup()
     const { cards } = scene
-    const onTable = cards.acquire('2D', true)
+    // As three.js would after drawing them: the atlas bound to the card material's uniforms.
+    renderer.properties.set(cards.material, { uniforms: { map: { value: cards.atlas.texture } } })
+    const onTable = cards.acquire({ face: '2D', faceUp: true })
     scene.table.add(onTable)
     const inPool = cards.acquire()
     cards.release(inPool)

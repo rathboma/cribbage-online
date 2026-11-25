@@ -266,13 +266,75 @@ describe('CardMesh.flip', () => {
     expect(card.faceUp).toBe(false) // built, not started
     animator.play(flip)
     expect(card.faceUp).toBe(true)
-    // So asking for the same again only sets the face, and leaves the turn alone.
+    // So asking for the same again leaves the turn alone, and the face waits until it shows.
+    animator.advance(FLIP_DURATION / 5)
     const again = card.flip({ faceUp: true, face: '2S' })
-    expect(again.duration).toBe(0)
+    expect(again.duration).toBe(FLIP_DURATION)
     animator.play(again)
-    expect(card.face).toBe('2S')
+    expect(card.face).toBeNull()
+    expect(frontUpness(card)).toBeLessThan(0)
     animator.advance(FLIP_DURATION)
+    expect(card.face).toBe('2S')
     expect(frontUpness(card)).toBeCloseTo(1)
+  })
+
+  it('asked again for the turn it is making, keeps the face it has until that side is down', () => {
+    const card = newCard()
+    card.setFace('8S')
+    card.setFaceUp(true)
+    const animator = new Animator()
+    animator.play(card.flip({ faceUp: false, face: null }))
+    animator.advance(FLIP_DURATION / 5) // still nearly flat, front up
+    animator.play(card.flip({ faceUp: false, face: null }))
+    expect(frontUpness(card)).toBeGreaterThan(0.5)
+    expect(card.face).toBe('8S') // no pop to blank while the front is in view
+    animator.advance(FLIP_DURATION)
+    expect(card.face).toBeNull()
+    expect(card.faceUp).toBe(false)
+  })
+
+  it('changes the face at once if asked while lying still the right way up', () => {
+    const card = newCard()
+    card.setFaceUp(true)
+    const animator = new Animator()
+    animator.play(card.flip({ faceUp: true, face: 'QC' }))
+    expect(card.face).toBe('QC')
+    expect(frontUpness(card)).toBeCloseTo(1)
+  })
+
+  it('decides when it plays, so flips can be queued one after another', () => {
+    const card = newCard()
+    const animator = new Animator()
+    const timeline = new Timeline()
+      .add(card.flip({ faceUp: true, face: 'KD' }))
+      .add(card.flip({ faceUp: false, face: null }))
+    expect(timeline.duration).toBe(2 * FLIP_DURATION)
+    const faces: (CardId | null)[] = []
+    play(animator, timeline, () => faces.push(card.face))
+    expect(faces).toContain('KD')
+    expect(card.faceUp).toBe(false)
+    expect(card.face).toBeNull()
+    expect(frontUpness(card)).toBeCloseTo(-1)
+  })
+
+  it('never shows the front without its face when a reveal reverses a hide part way', () => {
+    const card = newCard()
+    card.setFace('8S')
+    card.setFaceUp(true)
+    const animator = new Animator()
+    animator.play(card.flip({ faceUp: false, face: null }))
+    animator.advance(FLIP_DURATION * 0.6) // past edge-on: the face has gone
+    expect(card.face).toBeNull()
+    const rest = -CARD_THICKNESS / 2
+    const blankInView: number[] = []
+    play(animator, card.flip({ faceUp: true, face: '8S' }), () => {
+      if (frontUpness(card) > 1e-6 && card.face !== '8S') blankInView.push(frontUpness(card))
+      // Turning back from high up never takes the card through the table either.
+      expect(lowest(card)).toBeGreaterThanOrEqual(rest - 1e-6)
+    })
+    expect(blankInView).toEqual([])
+    expect(card.face).toBe('8S')
+    expect(card.faceUp).toBe(true)
   })
 
   it('can turn a card face down and forget its face as it goes over', () => {
@@ -297,6 +359,32 @@ describe('CardMesh.flip', () => {
     expect(card.faceUp).toBe(false)
     expect(frontUpness(card)).toBeCloseTo(-1)
     expect(card.body.position.y).toBe(0)
+  })
+
+  it('does nothing if the card went back to the pool before its turn on a timeline came', () => {
+    const card = newCard()
+    const animator = new Animator()
+    animator.play(new Timeline().wait(200).add(card.flip({ face: 'AH' })))
+    animator.advance(50)
+    card.reset() // released, and handed out again as an unknown card
+    const generation = card.generation
+    animator.advance(200 + FLIP_DURATION)
+    expect(card.generation).toBe(generation)
+    expect(card.face).toBeNull()
+    expect(card.faceUp).toBe(false)
+    expect(facesShown(card)).toEqual([])
+    expect(frontUpness(card)).toBeCloseTo(-1)
+  })
+
+  it('counts its uses, and forgets its name and data when it goes back to the pool', () => {
+    const card = newCard()
+    card.name = 'card-5H'
+    card.userData.slot = '5H'
+    const generation = card.generation
+    card.reset()
+    expect(card.generation).toBe(generation + 1)
+    expect(card.name).toBe('card')
+    expect(card.userData).toEqual({})
   })
 
   it('is stopped by going back to the pool, so a reused card never shows an old face', () => {

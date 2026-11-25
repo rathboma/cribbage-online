@@ -243,12 +243,13 @@ export class TableScene {
     canvas?.removeEventListener('webglcontextrestored', this.handleContextRestored)
     this.page?.removeEventListener('visibilitychange', this.handleVisibility)
 
-    const renderer = this.renderer
-    // Collected first: disposing a material makes the renderer forget its uniforms.
-    const bound = renderer ? boundTextures(this.scene, renderer) : []
-    // The cards first: those back in the pool are not in the scene for disposeTree to find.
+    // The cards first, on and off the table (those back in the pool are not in the scene for
+    // disposeTree to find). They leave the scene, so their atlas is released once, here.
     this.cardPool?.dispose()
     this.cardPool = null
+    const renderer = this.renderer
+    // Collected before the rest: disposing a material makes the renderer forget its uniforms.
+    const bound = renderer ? boundTextures(this.scene, renderer) : []
     disposeTree(this.scene)
     if (this.scene.background instanceof Texture) this.scene.background.dispose()
     for (const texture of bound) texture.dispose()

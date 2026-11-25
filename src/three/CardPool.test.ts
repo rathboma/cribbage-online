@@ -17,7 +17,7 @@ describe('CardPool', () => {
     const unknown = pool.acquire()
     expect(unknown.face).toBeNull()
     expect(unknown.faceUp).toBe(false)
-    const known = pool.acquire('5C', true)
+    const known = pool.acquire({ face: '5C', faceUp: true })
     expect(known.face).toBe('5C')
     expect(known.faceUp).toBe(true)
     expect(pool.size).toBe(2)
@@ -27,7 +27,7 @@ describe('CardPool', () => {
   it('reuses released cards, which come back blank, face down and off the table', () => {
     const pool = newPool()
     const table = new Group()
-    const card = pool.acquire('JH', true)
+    const card = pool.acquire({ face: 'JH', faceUp: true })
     card.position.set(1, 2, 3)
     card.rotation.y = 1
     card.scale.setScalar(2)
@@ -79,7 +79,7 @@ describe('CardPool', () => {
   it('shares one atlas texture and one material between every card: none of their own', () => {
     const pool = newPool()
     const table = new Group()
-    for (const card of fullDeck()) table.add(pool.acquire(cardId(card), true))
+    for (const card of fullDeck()) table.add(pool.acquire({ face: cardId(card), faceUp: true }))
     for (let i = 0; i < 8; i++) table.add(pool.acquire())
     const materials = new Set<Material>()
     const textures = new Set<Texture>()

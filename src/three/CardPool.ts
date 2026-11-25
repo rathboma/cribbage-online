@@ -52,7 +52,10 @@ export class CardPool {
    * A card for the table, made or reused: by default face down with no face. Add it to the
    * scene yourself; release it when it leaves the table.
    */
-  acquire(face: CardId | null = null, faceUp = false): CardMesh {
+  acquire({
+    face = null,
+    faceUp = false,
+  }: { face?: CardId | null; faceUp?: boolean } = {}): CardMesh {
     if (this.disposed) throw new Error('CardPool: already disposed')
     let card = this.free.pop()
     if (!card) {
@@ -65,8 +68,9 @@ export class CardPool {
   }
 
   /**
-   * Takes a card back: it leaves the scene and forgets its face, and anything still animating
-   * it stops.
+   * Takes a card back: it leaves the scene, forgets its face, and its `generation` goes up.
+   * Flips built for it do nothing from now on and tweens already moving it stop; other steps
+   * that act on it should check its generation (see CardMesh.reset).
    */
   release(card: CardMesh): void {
     if (!this.cards.has(card)) throw new Error('CardPool: this card is not from this pool')

@@ -29,20 +29,31 @@ export interface FakeImage {
 }
 
 /**
- * Canvas and image loading for the card atlas, under the test's control: images load when the
- * test says so (or at once), and the ones it names fail.
+ * Canvas and image loading for the card atlas, under the test's control: images load at once,
+ * or when the test releases them if `hold` says so, and the ones `fail` names fail (asked when
+ * each one settles, so a test can change its mind before a retry).
  */
 export function fakeAtlasSources(
-  options: { fail?: (url: string) => boolean; hold?: boolean } = {},
+  options: {
+    fail?: (url: string) => boolean
+    hold?: boolean | ((url: string) => boolean)
+  } = {},
 ) {
   const calls: DrawCall[] = []
-  const pending: (() => void)[] = []
-  const canvases: AtlasCanvas[] = []
+  const pending: { url: string; settle: () => void }[] = []
+  const contextSettings: (CanvasRenderingContext2DSettings | undefined)[] = []
+  const holds = (url: string) =>
+    typeof options.hold === 'function' ? options.hold(url) : !!options.hold
   const sources: AtlasSources = {
     createCanvas(width, height) {
-      const canvas: AtlasCanvas = { width, height, getContext: () => fakeContext(calls) }
-      canvases.push(canvas)
-      return canvas
+      return {
+        width,
+        height,
+        getContext: (_type: '2d', settings?: CanvasRenderingContext2DSettings) => {
+          contextSettings.push(settings)
+          return fakeContext(calls)
+        },
+      } satisfies AtlasCanvas
     },
     loadImage: vi.fn((url: string) => {
       return new Promise<CanvasImageSource>((resolve, reject) => {
@@ -50,7 +61,7 @@ export function fakeAtlasSources(
           options.fail?.(url)
             ? reject(new Error(`could not load ${url}`))
             : resolve({ url } as unknown as CanvasImageSource)
-        if (options.hold) pending.push(settle)
+        if (holds(url)) pending.push({ url, settle })
         else settle()
       })
     }),
@@ -58,10 +69,13 @@ export function fakeAtlasSources(
   return {
     sources,
     calls,
-    canvases,
-    /** Lets every image that is waiting finish loading (or fail). */
-    releaseImages() {
-      for (const settle of pending.splice(0)) settle()
+    contextSettings,
+    /** Lets the waiting images (those `which` picks, or all) finish loading or fail. */
+    releaseImages(which: (url: string) => boolean = () => true) {
+      for (const image of pending.filter((p) => which(p.url))) {
+        pending.splice(pending.indexOf(image), 1)
+        image.settle()
+      }
     },
     /** The images drawn so far, by URL. */
     drawnImages(): string[] {

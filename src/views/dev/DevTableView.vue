@@ -55,7 +55,10 @@ function layOutGallery(instance: TableScene) {
   const cellDepth = PLAY_AREA.depth / ROWS
   const scale = 0.94 * Math.min(cellWidth / CARD_WIDTH, cellDepth / CARD_HEIGHT)
   GALLERY.forEach((slot, i) => {
-    const card = slot === 'back' ? instance.cards.acquire() : instance.cards.acquire(slot, true)
+    const card =
+      slot === 'back'
+        ? instance.cards.acquire()
+        : instance.cards.acquire({ face: slot, faceUp: true })
     const column = i % COLUMNS
     const row = Math.floor(i / COLUMNS)
     card.name = `card-${slot}`
@@ -88,16 +91,17 @@ function tableCards(instance: TableScene): CardMesh[] {
   return instance.table.children.filter((child): child is CardMesh => child instanceof CardMesh)
 }
 
+let stopWatchingAtlas: (() => void) | null = null
+
 function onReady(instance: TableScene) {
   scene.value = instance
   failure.value = null
-  atlas.value = { loaded: false, missing: [] }
   layOutGallery(instance)
   const image = instance.cards.atlas.image
-  void image.loaded.then(() => {
-    if (scene.value !== instance) return
-    atlas.value = { loaded: true, missing: [...image.missing].sort() }
-  })
+  const show = () => (atlas.value = { loaded: image.complete, missing: image.missing })
+  show()
+  stopWatchingAtlas?.()
+  stopWatchingAtlas = image.subscribe(show)
   instance.invalidate()
 }
 
@@ -106,6 +110,8 @@ function onFailed(error: unknown) {
 }
 
 function onDisposed(report: DisposeReport) {
+  stopWatchingAtlas?.()
+  stopWatchingAtlas = null
   if (scene.value) scene.value = null
   frames.value = 0
   gpuTextures.value = null
