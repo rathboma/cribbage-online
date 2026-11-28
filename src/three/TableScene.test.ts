@@ -175,6 +175,101 @@ describe('TableScene', () => {
     }
   })
 
+  it('frames the camera on the part of the table a layout asks for', () => {
+    const { scene, renderer, frames } = setup()
+    scene.resize(1440, 900, 1)
+    const frame = { x: 1, z: -0.5, width: 11, depth: 7 }
+    scene.setFrame(frame)
+    expect(scene.viewFrame).toEqual(frame)
+    expect(frames.pending).toBe(1)
+    frames.tick()
+    const corners = [-1, 1].flatMap((sx) =>
+      [-1, 1].map((sz) => {
+        const v = new Vector3(
+          frame.x + (sx * frame.width) / 2,
+          0,
+          frame.z + (sz * frame.depth) / 2,
+        ).project(scene.camera)
+        return Math.max(Math.abs(v.x), Math.abs(v.y))
+      }),
+    )
+    expect(Math.max(...corners)).toBeLessThanOrEqual(1)
+    expect(Math.max(...corners)).toBeGreaterThan(0.9)
+    // The same frame again changes nothing and draws nothing.
+    const drawn = renderer.render.mock.calls.length
+    scene.setFrame({ ...frame })
+    frames.tick()
+    expect(renderer.render).toHaveBeenCalledTimes(drawn)
+  })
+
+  it('keeps the frame out of the insets the HUD covers, on later resizes too', () => {
+    const { scene } = setup()
+    const frame = { x: 0, z: 0, width: 6, depth: 10 }
+    const insets = { top: 100, bottom: 150 }
+    scene.resize(390, 844, 1)
+    scene.setFrame(frame, insets)
+    for (const [width, height] of [
+      [390, 844],
+      [420, 900],
+    ] as const) {
+      scene.resize(width, height, 1)
+      const ys = [-1, 1].flatMap((sx) =>
+        [-1, 1].map((sz) => {
+          const v = new Vector3((sx * frame.width) / 2, 0, (sz * frame.depth) / 2).project(
+            scene.camera,
+          )
+          return ((1 - v.y) / 2) * height
+        }),
+      )
+      expect(Math.min(...ys)).toBeGreaterThanOrEqual(insets.top)
+      expect(Math.max(...ys)).toBeLessThanOrEqual(height - insets.bottom)
+    }
+  })
+
+  it('draws a resize once, even when the layout changed during it', () => {
+    const renderer = fakeRenderer()
+    const frames = manualFrames()
+    const scene: TableScene = new TableScene({
+      createRenderer: () => renderer as unknown as TableRenderer,
+      frames,
+      page: fakePage().visibility,
+      atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
+      onResize: () => {
+        scene.setFrame({ x: 0, z: 0, width: 5, depth: 5 })
+        scene.invalidate()
+      },
+    })
+    scene.mount(document.createElement('canvas'))
+    frames.tick()
+    const drawn = renderer.render.mock.calls.length
+    scene.resize(400, 800, 1)
+    frames.tick()
+    expect(renderer.render).toHaveBeenCalledTimes(drawn + 1)
+  })
+
+  it('reports a resize before framing and drawing it, so the layout can change first', () => {
+    const renderer = fakeRenderer()
+    const order: string[] = []
+    renderer.render.mockImplementation(() => void order.push('render'))
+    const scene: TableScene = new TableScene({
+      createRenderer: () => renderer as unknown as TableRenderer,
+      frames: manualFrames(),
+      page: fakePage().visibility,
+      atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
+      onResize: (viewport) => {
+        order.push(`resize ${viewport.width}×${viewport.height}`)
+        scene.setFrame({ x: 0, z: 0, width: 4, depth: 4 })
+      },
+    })
+    scene.mount(document.createElement('canvas'))
+    scene.resize(400, 800, 1)
+    expect(order).toEqual(['resize 400×800', 'render'])
+    expect(scene.viewport).toEqual({ width: 400, height: 800 })
+    // The frame drawn is already the new one: its corner sits at the edge of the view.
+    const edge = new Vector3(2, 0, 2).project(scene.camera)
+    expect(Math.max(Math.abs(edge.x), Math.abs(edge.y))).toBeGreaterThan(0.9)
+  })
+
   it('stops drawing while the WebGL context is lost, and redraws once it is back', () => {
     const { scene, renderer, frames, canvas, onContextChange } = setup()
     const lost = new Event('webglcontextlost', { cancelable: true })

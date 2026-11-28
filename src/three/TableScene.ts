@@ -12,15 +12,21 @@ import {
   MeshStandardMaterial,
   Object3D,
   PCFShadowMap,
-  PerspectiveCamera,
   PlaneGeometry,
   Scene,
   Texture,
-  Vector3,
   WebGLRenderer,
 } from 'three'
 import { colors } from '@/design/tokens'
 import { Animator } from './anim'
+import {
+  frameCamera,
+  insetsOf,
+  makeCamera,
+  type Insets,
+  type TableRect,
+  type Viewport,
+} from './camera'
 import { cardAtlasImage, type AtlasImage } from './cardAtlas'
 import { CardPool } from './CardPool'
 
@@ -35,11 +41,17 @@ import { CardPool } from './CardPool'
  * +y is up, and +z points towards this player, who sits on the near (+z) side.
  */
 
-/** The part of the table the camera always keeps in view, centred on the origin. */
+/**
+ * The part of the table the camera keeps in view until a layout says otherwise (setFrame),
+ * centred on the origin.
+ */
 export const PLAY_AREA = { width: 8, depth: 11 } as const
 
 /** The whole table top (felt), larger than the play area so the felt fills a phone screen. */
-export const TABLE = { width: 15, depth: 19, railWidth: 0.7, railHeight: 0.18 } as const
+export const TABLE = { width: 32, depth: 24, railWidth: 0.7, railHeight: 0.18 } as const
+
+/** The felt is fully lit out to about half this from the centre, then darkens to the rail. */
+const LIT_AREA = { width: 9.5, depth: 9.5 } as const
 
 /** Sharper than this costs a lot of fill rate on phones for little visible gain. */
 export const MAX_PIXEL_RATIO = 2
@@ -49,11 +61,6 @@ export const MAX_ANISOTROPY = 8
 
 /** After a long pause (a background tab), animations jump at most this far in one frame. */
 const MAX_FRAME_MS = 100
-
-/** How far the camera leans back from looking straight down. */
-const CAMERA_TILT = MathUtils.degToRad(24)
-/** Fraction of the view kept clear around the play area. */
-const VIEW_MARGIN = 0.04
 
 /** The parts of a WebGLRenderer the scene uses (tests pass a stand-in). */
 export type TableRenderer = Pick<
@@ -83,6 +90,12 @@ export interface TableSceneOptions {
   onFrame?: (frameCount: number) => void
   /** Called when the browser takes the WebGL context away (true) and gives it back (false). */
   onContextChange?: (lost: boolean) => void
+  /**
+   * Called when the canvas changes size, before the camera is framed and the frame drawn: the
+   * place to lay the table out again for the new shape (and call setFrame), so no frame is
+   * ever drawn with the old layout. The viewport has no insets: add the HUD's own.
+   */
+  onResize?: (viewport: Viewport) => void
   /** Whether the page is hidden, and its `visibilitychange` events: `document` by default. */
   page?: PageVisibility
   /** The card atlas for a GPU's texture size limit: the page's cached one by default. */
@@ -110,7 +123,7 @@ const browserFrames: FrameScheduler = {
 
 export class TableScene {
   readonly scene = new Scene()
-  readonly camera = new PerspectiveCamera(36, 1, 0.5, 200)
+  readonly camera = makeCamera()
   /** Everything that moves goes through this; it wakes the frame loop when it starts. */
   readonly animator = new Animator()
   /** The table top: things on the table (cards, the board) are added here. */
@@ -125,11 +138,15 @@ export class TableScene {
   private lost = false
   private disposed = false
   private report: DisposeReport | null = null
+  private size: Viewport | null = null
+  private frameRect: TableRect = { x: 0, z: 0, ...PLAY_AREA }
+  private frameInsets: Insets = insetsOf({ width: 0, height: 0 })
 
   private readonly createRenderer: (canvas: HTMLCanvasElement) => TableRenderer
   private readonly scheduler: FrameScheduler
   private readonly onFrame?: (frameCount: number) => void
   private readonly onContextChange?: (lost: boolean) => void
+  private readonly onResize?: (viewport: Viewport) => void
   private readonly page: PageVisibility | null
   private readonly atlasImage: (maxTextureSize: number) => AtlasImage
 
@@ -138,6 +155,7 @@ export class TableScene {
     this.scheduler = options.frames ?? browserFrames
     this.onFrame = options.onFrame
     this.onContextChange = options.onContextChange
+    this.onResize = options.onResize
     this.page = options.page ?? (typeof document === 'undefined' ? null : document)
     this.atlasImage = options.atlasImage ?? cardAtlasImage
     this.animator.onWake = () => {
@@ -183,6 +201,44 @@ export class TableScene {
     return this.cardPool
   }
 
+  /** The canvas's size in CSS pixels, as last resized (null before the first resize). */
+  get viewport(): Viewport | null {
+    return this.size && { ...this.size }
+  }
+
+  /** The canvas as the camera frames it: its size and the insets kept clear. */
+  private get framing(): Viewport | null {
+    return this.size && { ...this.size, insets: this.frameInsets }
+  }
+
+  /** The part of the table the camera keeps in view. */
+  get viewFrame(): TableRect {
+    return { ...this.frameRect }
+  }
+
+  /**
+   * Frames the camera on another part of the table (from a layout), keeping it out of the
+   * insets (parts of the canvas the HUD covers), and redraws.
+   */
+  setFrame(frame: TableRect, insets: Partial<Insets> = {}): void {
+    const next = insetsOf({ width: 0, height: 0, insets })
+    const f = this.frameRect
+    const i = this.frameInsets
+    const sameFrame =
+      f.x === frame.x && f.z === frame.z && f.width === frame.width && f.depth === frame.depth
+    const sameInsets =
+      i.top === next.top &&
+      i.right === next.right &&
+      i.bottom === next.bottom &&
+      i.left === next.left
+    if (sameFrame && sameInsets) return
+    this.frameRect = { ...frame }
+    this.frameInsets = next
+    const framing = this.framing
+    if (framing) frameCamera(this.camera, this.frameRect, framing)
+    this.invalidate()
+  }
+
   /** Geometries and textures the renderer holds on the GPU now (null before mounting). */
   get gpuMemory(): { geometries: number; textures: number } | null {
     if (!this.renderer) return null
@@ -216,9 +272,15 @@ export class TableScene {
     if (!renderer || width <= 0 || height <= 0) return
     renderer.setPixelRatio(Math.min(Math.max(devicePixelRatio, 1), MAX_PIXEL_RATIO))
     renderer.setSize(width, height, false)
-    this.camera.aspect = width / height
-    this.fitCamera()
+    this.size = { width, height }
+    this.onResize?.({ width, height })
+    frameCamera(this.camera, this.frameRect, this.framing!)
     this.draw()
+    // Drawn just now, so a frame onResize asked for would only draw the same again.
+    if (this.frameHandle !== null && !this.animator.busy) {
+      this.scheduler.cancel(this.frameHandle)
+      this.frameHandle = null
+    }
   }
 
   /** Something changed: draw a frame soon (once, however many times this is called). */
@@ -330,41 +392,6 @@ export class TableScene {
     this.invalidate()
   }
 
-  /** Puts the camera as close as it can be while the whole play area stays in view. */
-  private fitCamera() {
-    const camera = this.camera
-    const target = new Vector3(0, 0, 0)
-    const direction = new Vector3(0, Math.cos(CAMERA_TILT), Math.sin(CAMERA_TILT))
-    const corners = [-1, 1].flatMap((sx) =>
-      [-1, 1].map((sz) => new Vector3((sx * PLAY_AREA.width) / 2, 0, (sz * PLAY_AREA.depth) / 2)),
-    )
-    const place = (distance: number) => {
-      camera.position.copy(direction).multiplyScalar(distance).add(target)
-      camera.lookAt(target)
-      camera.updateMatrixWorld()
-    }
-    const point = new Vector3()
-    const fits = () =>
-      corners.every((corner) => {
-        point.copy(corner).applyMatrix4(camera.matrixWorldInverse)
-        if (point.z > -camera.near) return false // behind the camera
-        point.applyMatrix4(camera.projectionMatrix)
-        return Math.abs(point.x) <= 1 - VIEW_MARGIN && Math.abs(point.y) <= 1 - VIEW_MARGIN
-      })
-
-    camera.updateProjectionMatrix()
-    // Further away always shows more, so a binary search finds the closest distance that fits.
-    let near = 1
-    let far = 150
-    for (let i = 0; i < 32; i++) {
-      const mid = (near + far) / 2
-      place(mid)
-      if (fits()) far = mid
-      else near = mid
-    }
-    place(far)
-  }
-
   private build() {
     const { scene } = this
     scene.background = new Color(colors.feltDark)
@@ -421,8 +448,10 @@ function feltGeometry(): PlaneGeometry {
   const shade = new Float32Array(position.count * 3)
   for (let i = 0; i < position.count; i++) {
     // The plane lies in x/y before it is turned flat; y becomes -z.
-    const dx = position.getX(i) / (PLAY_AREA.width * 0.8)
-    const dy = position.getY(i) / (PLAY_AREA.depth * 0.8)
+    // Wide enough to light both arrangements: the landscape one's deck and crib at the sides
+    // and the portrait one's hands at the near and far edges.
+    const dx = position.getX(i) / LIT_AREA.width
+    const dy = position.getY(i) / LIT_AREA.depth
     const t = MathUtils.smoothstep(Math.hypot(dx, dy), 0.45, 1.5)
     shade.fill(1 - 0.42 * t, i * 3, i * 3 + 3)
   }
