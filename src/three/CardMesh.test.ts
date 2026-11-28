@@ -182,6 +182,30 @@ describe('CardMesh faces', () => {
     expect(frontUpness(card)).toBeCloseTo(-1)
   })
 
+  it('is dimmed by a shade in its own vertex colours, not a material of its own', () => {
+    const card = newCard()
+    const color = attribute(card, 'color')
+    expect(card.tint).toBe(1)
+    expect(color.count).toBe(attribute(card, 'position').count)
+    expect(new Set(color.array)).toEqual(new Set([1]))
+    const version = color.version
+    card.setTint(0.5)
+    expect(card.tint).toBe(0.5)
+    expect(new Set(color.array)).toEqual(new Set([0.5]))
+    expect(color.version).toBeGreaterThan(version)
+    expect(card.body.material).toBe(material)
+  })
+
+  it('back in the pool, is drawn as printed and loses its hover and shake offsets', () => {
+    const card = newCard()
+    card.setTint(0.4)
+    card.body.position.x = 0.05
+    card.body.position.z = -0.2
+    card.reset()
+    expect(card.tint).toBe(1)
+    expect(card.body.position.toArray()).toEqual([0, 0, 0])
+  })
+
   it('frees its geometry on dispose', () => {
     const card = newCard()
     const parent = new Group().add(card)

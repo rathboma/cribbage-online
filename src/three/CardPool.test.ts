@@ -95,6 +95,8 @@ describe('CardPool', () => {
     expect(materials).toEqual(new Set([pool.material]))
     expect(textures).toEqual(new Set([pool.atlas.texture]))
     expect(pool.material.map).toBe(pool.atlas.texture)
+    // Dimmed cards too: their shade is in their vertex colours, which the material uses.
+    expect(pool.material.vertexColors).toBe(true)
   })
 
   it('passes on the anisotropy and the atlas redraw', async () => {

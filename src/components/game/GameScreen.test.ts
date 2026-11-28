@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import type { GameState } from '@shared/engine'
@@ -8,6 +9,7 @@ import { useApiClient } from '@/api'
 import { ApiError, type ApiClient } from '@/api/client'
 import { loadSession, saveSession } from '@/api/session'
 import App from '@/App.vue'
+import { resetTableView, VIEW_STORAGE_KEY } from '@/composables/useTableView'
 import { routes } from '@/router/routes'
 import { useGameStore } from '@/stores/game'
 import { useToasts } from '@/stores/toasts'
@@ -20,7 +22,29 @@ import {
   workedExample,
 } from '@/test/game'
 
+// WebGL as the test says (jsdom has none), and the 3D table as a stand-in that records what
+// the game screen hands it and lets the test speak for it.
+const three = vi.hoisted(() => ({
+  webgl: false,
+  props: null as Record<string, unknown> | null,
+  emit: null as ((event: string, ...args: unknown[]) => void) | null,
+}))
+vi.mock('@/three/support', () => ({ webglAvailable: () => three.webgl }))
+vi.mock('@/components/table/ThreeTable.vue', () => ({
+  default: defineComponent({
+    props: ['view', 'selected', 'busy', 'hole'],
+    emits: ['update:selected', 'play', 'cut', 'failed'],
+    setup(props, { emit }) {
+      three.props = props
+      three.emit = emit as (event: string, ...args: unknown[]) => void
+      return () => h('div', { 'data-testid': 'three-table' })
+    },
+  }),
+}))
+
 let restore: () => void
+/** Unmounted after each test, so no screen from one test reacts to the next one's changes. */
+const mounted: { unmount(): void }[] = []
 let sync: ReturnType<typeof vi.fn>
 let act: ReturnType<typeof vi.fn>
 let version = 1
@@ -49,6 +73,7 @@ async function open(state: GameState, seat: Seat = 0, status: GameStatus = 'acti
   const pinia = createPinia()
   setActivePinia(pinia)
   const wrapper = mount(App, { global: { plugins: [router, pinia] }, attachTo: document.body })
+  mounted.push(wrapper)
   await flushPromises()
   await vi.advanceTimersByTimeAsync(0)
   return wrapper
@@ -67,9 +92,14 @@ beforeEach(() => {
   restore = useApiClient({ sync, act } as unknown as ApiClient)
 })
 afterEach(() => {
+  for (const wrapper of mounted.splice(0)) wrapper.unmount()
   restore()
   vi.useRealTimers()
   localStorage.clear()
+  resetTableView()
+  three.webgl = false
+  three.props = null
+  three.emit = null
   document.body.innerHTML = ''
 })
 
@@ -322,5 +352,160 @@ describe('game screen', () => {
     window.dispatchEvent(new Event('pointerdown'))
     await vi.advanceTimersByTimeAsync(0)
     expect(sync.mock.calls.length).toBe(calls + 1)
+  })
+})
+
+describe('game screen with the 3D table', () => {
+  beforeEach(() => {
+    three.webgl = true
+  })
+
+  /** Opens the screen and waits for the 3D table's code to load. */
+  async function open3d(state: GameState, seat: Seat = 0) {
+    const wrapper = await open(state, seat)
+    await flushPromises()
+    return wrapper
+  }
+
+  it('draws the 3D table behind the HUD, its cards in the hole the HUD leaves', async () => {
+    const wrapper = await open3d(workedExample())
+    expect(wrapper.find(testId('three-table')).exists()).toBe(true)
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(false)
+    const hole = wrapper.get(testId('table-hole'))
+    expect(three.props?.hole).toBe(hole.element)
+    expect(three.props?.view).toMatchObject({ phase: 'play', myHand: ['3C', '7S', '8D', 'KH'] })
+    // The HUD is the same as with the simple table.
+    expect(wrapper.get(testId('prompt')).text()).toBe('Your turn — count is 0')
+  })
+
+  it('keeps the 3D table on screen while the hand is counted', async () => {
+    const shown = playMoves(workedExample(), WORKED_EXAMPLE_MOVES).state
+    const wrapper = await open3d(shown)
+    expect(wrapper.find(testId('three-table')).exists()).toBe(true)
+    expect(wrapper.find(testId('table-hole')).exists()).toBe(true)
+    expect(wrapper.findAll(testId('show-hand'))).toHaveLength(3)
+  })
+
+  it('sends the moves the 3D table reports through the store', async () => {
+    const before = workedExample()
+    await open3d(before)
+    act.mockResolvedValue(response(playMoves(before, WORKED_EXAMPLE_MOVES.slice(0, 1)).state, 0))
+    three.emit!('play', '7S')
+    await flushPromises()
+    expect(act).toHaveBeenCalledTimes(1)
+    expect(act.mock.calls[0]?.[2]).toMatchObject({ action: { type: 'play', card: '7S' } })
+    // A second tap while the first is on its way, or straight after, sends nothing.
+    three.emit!('play', '8D')
+    expect(act).toHaveBeenCalledTimes(1)
+    expect(three.props?.busy).toBe(true)
+  })
+
+  it('picks cards for the crib on the 3D table and sends them with the HUD button', async () => {
+    const before = stateWhen((s) => s.phase === 'discard')
+    const wrapper = await open3d(before)
+    const [a, b] = before.hands[0] as [CardId, CardId]
+    three.emit!('update:selected', [a, b])
+    await flushPromises()
+    expect(three.props?.selected).toEqual([a, b])
+    act.mockResolvedValue(response(before, 0))
+    await wrapper.get(testId('action-discard')).trigger('click')
+    await flushPromises()
+    expect(act.mock.calls[0]?.[2]).toMatchObject({ action: { type: 'discard', cards: [a, b] } })
+  })
+
+  it('cuts when the 3D table reports a tap on the deck', async () => {
+    const cutting = stateWhen((s) => s.phase === 'cut')
+    const pone: Seat = cutting.dealer === 0 ? 1 : 0
+    await open3d(cutting, pone)
+    act.mockResolvedValue(response(cutting, pone))
+    three.emit!('cut')
+    await flushPromises()
+    expect(act.mock.calls.at(-1)?.[2]).toMatchObject({ action: { type: 'cut' } })
+  })
+
+  it('switches to the simple table from the game menu, and remembers it', async () => {
+    const wrapper = await open3d(workedExample())
+    const panel = wrapper.get(testId('game-menu-panel'))
+    expect(panel.isVisible()).toBe(false)
+    await wrapper.get(testId('game-menu')).trigger('click')
+    expect(wrapper.get(testId('game-menu')).attributes('aria-expanded')).toBe('true')
+    const toggle = wrapper.get(`${testId('view-switch')} [role="switch"]`)
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    await toggle.trigger('click')
+    expect(wrapper.find(testId('three-table')).exists()).toBe(false)
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
+    expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('2d')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    // And back.
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(wrapper.find(testId('three-table')).exists()).toBe(true)
+    expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('3d')
+  })
+
+  it('closes the menu with Escape, giving focus back to its button', async () => {
+    const wrapper = await open3d(workedExample())
+    const button = wrapper.get(testId('game-menu'))
+    await button.trigger('click')
+    await wrapper.get(testId('game-menu-panel')).trigger('keydown', { key: 'Escape' })
+    expect(button.attributes('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(button.element)
+  })
+
+  it('closes the menu when the player presses anywhere else', async () => {
+    const wrapper = await open3d(workedExample())
+    const button = wrapper.get(testId('game-menu'))
+    await button.trigger('click')
+    // Inside the panel it stays open...
+    wrapper
+      .get(testId('view-switch'))
+      .element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(button.attributes('aria-expanded')).toBe('true')
+    // ...anywhere else it closes.
+    wrapper
+      .get(testId('prompt'))
+      .element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(button.attributes('aria-expanded')).toBe('false')
+  })
+
+  it('offers keyboard players the simple table from inside the 3D one', async () => {
+    const wrapper = await open3d(workedExample())
+    await wrapper.get(testId('use-simple-table')).trigger('click')
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
+    expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('2d')
+  })
+
+  it('starts with the simple table when the player chose it before', async () => {
+    localStorage.setItem(VIEW_STORAGE_KEY, '2d')
+    const wrapper = await open3d(workedExample())
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
+    expect(wrapper.find(testId('three-table')).exists()).toBe(false)
+    expect(wrapper.find(testId('game-menu')).exists()).toBe(true)
+  })
+
+  it('falls back to the simple table, and says so, if the 3D one cannot start', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = await open3d(workedExample())
+    three.emit!('failed', new Error('no WebGL context'))
+    await flushPromises()
+    expect(wrapper.find(testId('three-table')).exists()).toBe(false)
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
+    // Nothing to choose any more.
+    expect(wrapper.find(testId('game-menu')).exists()).toBe(false)
+    expect(useToasts().toasts).toMatchObject([{ kind: 'info' }])
+    // The choice is kept for a browser where it works.
+    expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBeNull()
+  })
+})
+
+describe('game screen without WebGL', () => {
+  it('shows the simple table and offers no choice of table', async () => {
+    localStorage.setItem(VIEW_STORAGE_KEY, '3d')
+    const wrapper = await open(workedExample())
+    expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
+    expect(wrapper.find(testId('three-table')).exists()).toBe(false)
+    expect(wrapper.find(testId('game-menu')).exists()).toBe(false)
   })
 })

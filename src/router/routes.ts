@@ -1,6 +1,7 @@
 import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 import { parseGameCode } from '@shared/protocol'
 import { loadSession } from '@/api/session'
+import { parseTableView, setTableView } from '@/composables/useTableView'
 import LandingView from '@/views/LandingView.vue'
 
 /** The game screen needs this browser's seat: without a session, offer to join instead. */
@@ -15,6 +16,19 @@ function canonicalCode(to: RouteLocationNormalized) {
   const code = parseGameCode(raw)
   if (code === null || code === raw) return true
   return { ...to, params: { ...to.params, code } }
+}
+
+/**
+ * `?view=2d` or `?view=3d` on any page chooses the table, as the switch in the game menu does,
+ * and is then taken out of the URL: left in, a reload would undo a later change of mind.
+ */
+export function applyViewParam(to: RouteLocationNormalized) {
+  const choice = parseTableView(to.query.view)
+  if (!choice) return true
+  setTableView(choice)
+  const query = { ...to.query }
+  delete query.view
+  return { path: to.path, query, hash: to.hash, replace: true }
 }
 
 function devRoutes(): RouteRecordRaw[] {

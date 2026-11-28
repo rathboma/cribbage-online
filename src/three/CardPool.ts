@@ -32,6 +32,8 @@ export class CardPool {
     this.material = new MeshStandardMaterial({
       name: 'card',
       map: this.atlas.texture,
+      // Each card's own shade (CardMesh.setTint): dimmed cards share the material too.
+      vertexColors: true,
       // Satin card stock: a soft sheen under the lamp that doesn't wash out the print.
       roughness: 0.62,
       metalness: 0,
