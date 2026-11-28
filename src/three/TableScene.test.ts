@@ -1,77 +1,29 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BoxGeometry, Mesh, MeshStandardMaterial, Texture, Vector3 } from 'three'
+import {
+  BoxGeometry,
+  Mesh,
+  MeshStandardMaterial,
+  Plane,
+  Raycaster,
+  Texture,
+  Vector2,
+  Vector3,
+} from 'three'
 import { fakeAtlasSources } from '@/test/atlas'
+import { fakePage, fakeRenderer, manualFrames, testScene } from '@/test/scene'
+import { cardLayer } from './applyLayout'
 import { AtlasImage, atlasLayout } from './cardAtlas'
+import { computeLayout } from './layout'
+import { LAYOUT_FIXTURES, fixtureView } from './layoutFixtures'
 import {
   MAX_ANISOTROPY,
   MAX_PIXEL_RATIO,
   PLAY_AREA,
+  TABLE,
   TableScene,
   disposeTree,
-  type PageVisibility,
   type TableRenderer,
 } from './TableScene'
-
-/** A renderer stand-in that counts what the scene asks of it (jsdom has no WebGL). */
-function fakeRenderer() {
-  let lost = false
-  const loseContext = vi.fn(() => (lost = true))
-  const renderer = {
-    loseContext,
-    /** The browser gives the context back. */
-    restore: () => (lost = false),
-    shadowMap: { enabled: false, type: 0 },
-    info: { memory: { geometries: 0, textures: 0 } },
-    properties: new Map<unknown, unknown>(),
-    capabilities: { maxTextureSize: 4096, getMaxAnisotropy: () => 16 },
-    setPixelRatio: vi.fn(),
-    setSize: vi.fn(),
-    render: vi.fn(),
-    dispose: vi.fn(),
-    forceContextLoss: vi.fn(() => (lost = true)),
-    getContext: () => ({
-      isContextLost: () => lost,
-      getExtension: () => (lost ? null : { loseContext }),
-    }),
-  }
-  return renderer
-}
-
-/** Frames that run only when the test says so. */
-function manualFrames() {
-  let next = 1
-  const pending = new Map<number, (time: number) => void>()
-  let now = 0
-  return {
-    request: vi.fn((callback: (time: number) => void) => {
-      pending.set(next, callback)
-      return next++
-    }),
-    cancel: vi.fn((handle: number) => void pending.delete(handle)),
-    get pending() {
-      return pending.size
-    },
-    /** Runs the frames that are waiting, `ms` after the last ones. */
-    tick(ms = 16) {
-      now += ms
-      const callbacks = [...pending.values()]
-      pending.clear()
-      for (const callback of callbacks) callback(now)
-    },
-  }
-}
-
-/** The page's visibility, switched by the test. */
-function fakePage() {
-  const page = Object.assign(new EventTarget(), { hidden: false })
-  return {
-    visibility: page as unknown as PageVisibility,
-    set hidden(hidden: boolean) {
-      page.hidden = hidden
-      page.dispatchEvent(new Event('visibilitychange'))
-    },
-  }
-}
 
 function setup() {
   const renderer = fakeRenderer()
@@ -245,6 +197,24 @@ describe('TableScene', () => {
     scene.resize(400, 800, 1)
     frames.tick()
     expect(renderer.render).toHaveBeenCalledTimes(drawn + 1)
+  })
+
+  it('has the camera fitted to the new size by the time it reports a resize', () => {
+    const aspects: number[] = []
+    const scene: TableScene = new TableScene({
+      createRenderer: () => fakeRenderer() as unknown as TableRenderer,
+      frames: manualFrames(),
+      page: fakePage().visibility,
+      atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
+      // Whatever the layout works out from the camera here (where a card is on screen) must
+      // already be for the new size, even if its frame stays the same.
+      onResize: () => aspects.push(scene.camera.aspect),
+    })
+    scene.mount(document.createElement('canvas'))
+    scene.resize(400, 800, 1)
+    scene.resize(900, 450, 1)
+    expect(aspects[0]).toBeCloseTo(400 / 800)
+    expect(aspects[1]).toBeCloseTo(900 / 450)
   })
 
   it('reports a resize before framing and drawing it, so the layout can change first', () => {
@@ -474,4 +444,54 @@ describe('disposeTree', () => {
     disposeTree(root)
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1)
   })
+})
+
+describe('the felt', () => {
+  // In a game the canvas fills the screen and the HUD covers its top and bottom; the camera
+  // frames the cards in the band between, so it sees further up the table than the cards
+  // reach. However the screen is shaped, the canvas shows felt to its edges, never the rail.
+  const SCREENS = [
+    // width, height, and the share of the height the HUD covers above and below
+    [320, 568, 0.25, 0.35],
+    [360, 640, 0.22, 0.3],
+    [390, 844, 0.16, 0.22],
+    [412, 915, 0.15, 0.2],
+    [844, 480, 0.27, 0.36],
+    [768, 1024, 0.12, 0.16],
+    [1024, 768, 0.16, 0.2],
+    [1280, 720, 0.18, 0.22],
+    [1920, 1080, 0.13, 0.16],
+  ] as const
+
+  it.each(SCREENS)(
+    'fills a %i×%i canvas, with the HUD over it and without',
+    (w, h, top, bottom) => {
+      const { scene } = testScene(w, h)
+      const floor = new Plane(new Vector3(0, 1, 0), 0)
+      const ray = new Raycaster()
+      for (const insets of [{}, { top: top * h, bottom: bottom * h }]) {
+        for (const id of ['deal', 'show-3']) {
+          const { view, options } = fixtureView(
+            LAYOUT_FIXTURES.find((f) => f.id === id)!,
+            0,
+          )
+          cardLayer(scene).apply(computeLayout(view, { width: w, height: h, insets }, options))
+          for (const [x, y] of [
+            [-1, -1],
+            [-1, 1],
+            [1, -1],
+            [1, 1],
+          ] as const) {
+            ray.setFromCamera(new Vector2(x, y), scene.camera)
+            const hit = ray.ray.intersectPlane(floor, new Vector3())
+            const where = `corner ${x},${y} with insets ${JSON.stringify(insets)} (${id})`
+            expect(hit, where).not.toBeNull()
+            expect(Math.abs(hit!.x), where).toBeLessThan(TABLE.width / 2)
+            expect(Math.abs(hit!.z), where).toBeLessThan(TABLE.depth / 2)
+          }
+        }
+      }
+      scene.dispose()
+    },
+  )
 })

@@ -47,8 +47,13 @@ import { CardPool } from './CardPool'
  */
 export const PLAY_AREA = { width: 8, depth: 11 } as const
 
-/** The whole table top (felt), larger than the play area so the felt fills a phone screen. */
-export const TABLE = { width: 32, depth: 24, railWidth: 0.7, railHeight: 0.18 } as const
+/**
+ * The whole table top (felt): far larger than the play area, so the felt fills the screen to
+ * its edges. In a game the camera frames the cards between the HUD's scores and its buttons and
+ * so sees well up the table beyond them, most of all on a short, wide screen (a phone on its
+ * side shows felt some 31 units to each side and 18 back).
+ */
+export const TABLE = { width: 72, depth: 42, railWidth: 0.7, railHeight: 0.18 } as const
 
 /** The felt is fully lit out to about half this from the centre, then darkens to the rail. */
 const LIT_AREA = { width: 9.5, depth: 9.5 } as const
@@ -273,6 +278,9 @@ export class TableScene {
     renderer.setPixelRatio(Math.min(Math.max(devicePixelRatio, 1), MAX_PIXEL_RATIO))
     renderer.setSize(width, height, false)
     this.size = { width, height }
+    // Framed for the new size before the layout is told, so whatever it works out from the
+    // camera (where a card is on screen) is already right, and again after, for its new frame.
+    frameCamera(this.camera, this.frameRect, this.framing!)
     this.onResize?.({ width, height })
     frameCamera(this.camera, this.frameRect, this.framing!)
     this.draw()
@@ -443,7 +451,8 @@ export class TableScene {
  * texture.
  */
 function feltGeometry(): PlaneGeometry {
-  const geometry = new PlaneGeometry(TABLE.width, TABLE.depth, 30, 38)
+  // About a segment per unit across the lit middle: enough for a smooth fall-off.
+  const geometry = new PlaneGeometry(TABLE.width, TABLE.depth, 64, 64)
   const position = geometry.getAttribute('position')
   const shade = new Float32Array(position.count * 3)
   for (let i = 0; i < position.count; i++) {

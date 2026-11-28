@@ -61,6 +61,14 @@ whatever the UI offers. The first time, install the browser with
   cards and a failed run cannot be replayed. Tests must not rely on particular cards: they press
   what the UI offers. (The test that needs a Go plays the highest card first until one comes up,
   which the engine's simulator puts at 93% of hands.)
+- **The simple table, unless a test says otherwise.** Every browser a test opens (`newPlayer` in
+  `e2e/table.ts`) starts on the simple table: an init script sets `cribbage:view` to `2d` when the
+  browser has no choice of table yet, so a test that changes it (the game menu) still sees its
+  choice kept after a reload.
+- **The 3D table in a game.** `e2e/table3d.spec.ts` plays on the canvas, with a mouse or, on an
+  emulated phone, by touch. The cards are drawn, so there is nothing to click by test id: the 3D
+  table keeps a hidden list of the cards that take input and where each one's middle is drawn
+  (`table-target`), and the helpers in `e2e/table3d.ts` tap the canvas there.
 - **The 3D table on its own.** `e2e/scene.spec.ts` (the `scene` project) tests the three.js
   scene at `/dev/table` with real WebGL: no frames while idle, no distortion on resize, nothing
   left behind after mounting and unmounting it 20 times, recovery from a lost context. That page

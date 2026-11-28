@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, useTemplateRef, watch } from 'vue'
-import { DISCARD_COUNT } from '@shared/engine'
 import type { CardId, PlayerView, Seat } from '@shared/protocol'
 import CardBack from '@/components/cards/CardBack.vue'
 import PlayingCard from '@/components/cards/PlayingCard.vue'
+import { canUseCard, handCardState, tapCard, type HandCardState } from '@/game/handInput'
 import { Whose, type Seats } from '@/game/seats'
 
 /**
@@ -26,43 +26,20 @@ const emit = defineEmits<{ 'update:selected': [cards: CardId[]]; play: [card: Ca
 
 const opponentName = computed(() => props.seats.names[props.seats.opponent])
 const picking = computed(() => props.view.legal.discard)
-const playable = computed(() => new Set(props.view.legal.playable))
-/** It is this player's turn in the play (with a card to lay, or stuck and owing a go). */
-const onTurn = computed(
-  () => props.view.phase === 'play' && (playable.value.size > 0 || props.view.legal.go),
-)
 
-/**
- * idle: nothing to do with it now. usable: can be picked or played. selected: picked for the
- * crib. blocked: it's this player's move, but not with this card.
- */
-type CardState = 'idle' | 'usable' | 'selected' | 'blocked'
-
-function stateOf(card: CardId): CardState {
-  if (picking.value) {
-    if (props.selected.includes(card)) return 'selected'
-    if (props.busy) return 'idle'
-    return props.selected.length >= DISCARD_COUNT ? 'blocked' : 'usable'
-  }
-  // While busy the cards lie flat: that is how a tap shows it was taken.
-  if (onTurn.value && !props.busy) return playable.value.has(card) ? 'usable' : 'blocked'
-  return 'idle'
+function stateOf(card: CardId): HandCardState {
+  return handCardState(props.view, props.selected, props.busy, card)
 }
 
 function canUse(card: CardId): boolean {
-  const state = stateOf(card)
-  return !props.busy && (state === 'usable' || state === 'selected')
+  return canUseCard(stateOf(card), props.busy)
 }
 
 function use(card: CardId) {
-  if (!canUse(card)) return
-  if (!picking.value) emit('play', card)
-  else if (props.selected.includes(card)) {
-    emit(
-      'update:selected',
-      props.selected.filter((c) => c !== card),
-    )
-  } else emit('update:selected', [...props.selected, card])
+  const tap = tapCard(props.view, props.selected, props.busy, card)
+  if (!tap) return
+  if ('play' in tap) emit('play', tap.play)
+  else emit('update:selected', tap.select)
 }
 
 /** Holding Enter down must not play card after card: only the first press counts. */

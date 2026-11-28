@@ -3,7 +3,13 @@
  * read what both screens show, and make moves through the controls the UI offers.
  * Everything is found by data-testid, never by wording or layout.
  */
-import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import {
+  expect,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from '@playwright/test'
 import { GAME_CODE_ALPHABET, GAME_CODE_LENGTH } from '../shared/protocol/gameCode'
 
 export const CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{${GAME_CODE_LENGTH}}$`)
@@ -19,9 +25,44 @@ export interface Player {
   errors: string[]
 }
 
+/** Where the game keeps the choice of table (src/composables/useTableView.ts). */
+const VIEW_STORAGE_KEY = 'cribbage:view'
+
+export interface PlayerOptions {
+  /**
+   * The table this player starts with. The simple one by default: the tests drive it through
+   * its buttons. The choice is only made when the browser has none, so a test can change it
+   * (the game menu) and see it kept after a reload.
+   */
+  view?: '2d' | '3d'
+  /** For the browser profile: a phone to emulate, say. */
+  context?: BrowserContextOptions
+  /** false: a browser without WebGL 2, as some old or locked-down ones are. */
+  webgl?: boolean
+}
+
 /** A person with their own browser profile (their own localStorage, so their own seat). */
-export async function newPlayer(browser: Browser, name: string): Promise<Player> {
-  const context = await browser.newContext()
+export async function newPlayer(
+  browser: Browser,
+  name: string,
+  options: PlayerOptions = {},
+): Promise<Player> {
+  const context = await browser.newContext(options.context)
+  await context.addInitScript(
+    ([key, view]) => {
+      try {
+        if (!localStorage.getItem(key)) localStorage.setItem(key, view)
+      } catch {
+        // A page with no storage (about:blank): nothing to choose.
+      }
+    },
+    [VIEW_STORAGE_KEY, options.view ?? '2d'] as const,
+  )
+  if (options.webgl === false) {
+    await context.addInitScript(() => {
+      Object.defineProperty(window, 'WebGL2RenderingContext', { value: undefined })
+    })
+  }
   const page = await context.newPage()
   const errors: string[] = []
   page.on('console', (message) => {
@@ -73,9 +114,10 @@ export async function joinByLink(guest: Player, code: string): Promise<void> {
 /** Two players at a table with the first hand dealt. */
 export async function seatTwoPlayers(
   browser: Browser,
+  options: { host?: PlayerOptions; guest?: PlayerOptions } = {},
 ): Promise<{ host: Player; guest: Player; code: string }> {
-  const host = await newPlayer(browser, 'Ada')
-  const guest = await newPlayer(browser, 'Sam')
+  const host = await newPlayer(browser, 'Ada', options.host)
+  const guest = await newPlayer(browser, 'Sam', options.guest)
   const code = await startGame(host)
   await joinByLink(guest, code)
   for (const player of [host, guest]) {

@@ -108,12 +108,15 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
 }
-/* Out of the flow, so the canvas's own size can never feed back into the box it measures. */
+/* Out of the flow, so the canvas's own size can never feed back into the box it measures. A
+   finger on the table is playing: the page must not scroll or zoom under it (unless the page
+   around it says otherwise, as the game screen does on a very short screen). */
 .game-table__canvas {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: var(--table-touch-action, none);
 }
 </style>

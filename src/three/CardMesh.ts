@@ -22,7 +22,9 @@ import { CORNER_RADIUS_PER_WIDTH, type AtlasSlot, type UvRect } from './cardAtla
  *
  * In its own space the card lies flat, front up (+y), with the top of its art away from the
  * player (−z). The layout moves and turns the CardMesh; turning the card over happens inside
- * it, on `body`, about the card's long axis, so the two never interfere.
+ * it, on `body`, about the card's long axis, so the two never interfere. The body's x and z are
+ * free for small nudges that must survive the layout: a hovered card slides up the table (−z),
+ * a refused one shakes from side to side (x).
  */
 
 /** World units; a unit is about 6 cm, so this is close to a real card's 6.35 cm. */
@@ -143,6 +145,11 @@ function cardGeometry(): BufferGeometry {
   const uv = new BufferAttribute(new Float32Array(template.vertexCount * 2), 2)
   uv.setUsage(DynamicDrawUsage)
   geometry.setAttribute('uv', uv)
+  // A shade for the whole card, multiplied into its colour: how a card is dimmed without a
+  // material of its own (see setTint).
+  const color = new BufferAttribute(new Float32Array(template.vertexCount * 3).fill(1), 3)
+  color.setUsage(DynamicDrawUsage)
+  geometry.setAttribute('color', color)
   geometry.setIndex(template.indices)
   geometry.computeBoundingSphere()
   geometry.computeBoundingBox()
@@ -196,6 +203,7 @@ export class CardMesh extends Object3D {
   /** The card itself. It turns over inside the CardMesh, which the layout positions. */
   readonly body: Mesh<BufferGeometry, Material>
   private currentFace: CardId | null = null
+  private currentTint = 1
   private frontUp = false
   /**
    * Counts turns of the card (flips, setFaceUp, going back to the pool). A flip moves the card
@@ -254,6 +262,24 @@ export class CardMesh extends Object3D {
     const uv = this.body.geometry.getAttribute('uv') as BufferAttribute
     mapPart(uv, template.front, this.atlasUv(face ?? 'blank'))
     uv.needsUpdate = true
+  }
+
+  /** How bright the card is drawn: 1 as printed, less to dim it (see setTint). */
+  get tint(): number {
+    return this.currentTint
+  }
+
+  /**
+   * Draws the whole card this much as bright as printed: below 1 dims it (a card that can't be
+   * played now). Every card shares one material, so the shade is in the card's own vertex
+   * colours, which the material multiplies in.
+   */
+  setTint(tint: number): void {
+    if (tint === this.currentTint) return
+    this.currentTint = tint
+    const color = this.body.geometry.getAttribute('color') as BufferAttribute
+    ;(color.array as Float32Array).fill(tint)
+    color.needsUpdate = true
   }
 
   /** Turns the card front up or down at once, ending any flip in progress, reveal and all. */
@@ -358,9 +384,9 @@ export class CardMesh extends Object3D {
   }
 
   /**
-   * Back to how a new card starts: no face, face down, at the origin, unnamed, and nothing
-   * animating it. Flips built for its previous use do nothing; tweens that have already started
-   * stop; other steps should check `generation`.
+   * Back to how a new card starts: no face, face down, at the origin, unnamed, not dimmed, and
+   * nothing animating it. Flips built for its previous use do nothing; tweens that have already
+   * started stop; other steps should check `generation`.
    */
   reset(): void {
     this.uses++
@@ -376,6 +402,10 @@ export class CardMesh extends Object3D {
     this.visible = true
     this.name = 'card'
     this.userData = {}
+    // Offsets for hovering and shaking (TableInput); a flip owns the body's height and turn.
+    this.body.position.x = 0
+    this.body.position.z = 0
+    this.setTint(1)
     this.setFace(null)
     this.setFaceUp(false)
   }
