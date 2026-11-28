@@ -97,8 +97,11 @@ function present(instance: TableScene) {
 
 function layOutFixture(instance: TableScene, viewport: Viewport) {
   if (!fixture.value) return
-  const { view, selected } = fixtureView(fixture.value, seat.value)
-  const layout = computeLayout(view, viewport, { selected })
+  const { view, options } = fixtureView(fixture.value, seat.value)
+  const layout = computeLayout(view, viewport, {
+    ...options,
+    previousMode: layoutMode.value ?? undefined,
+  })
   cardLayer(instance).apply(layout)
   layoutMode.value = layout.mode
   updateCardStats(instance)

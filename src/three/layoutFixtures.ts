@@ -11,15 +11,16 @@ import {
   type PlayerView,
   type Seat,
 } from '@shared/engine'
+import type { LayoutOptions } from './layout'
 
 /**
  * One hand of a game at every point the table has to draw, for /dev/table and the layout
  * tests. The states come from the real rules engine, so each view is exactly what the server
  * would send either seat.
  *
- * The hand is the worked example from cribbage_rules.md: seat 0 is the pone and keeps
- * 3♣ 7♠ 8♦ K♥, seat 1 deals and keeps 2♠ 8♣ 9♥ Q♦, the crib is 4♦ 6♠ A♣ J♥ and the starter
- * is 5♥.
+ * The hands are those of the worked example in cribbage_rules.md (the play goes differently,
+ * to include a go): seat 0 is the pone and keeps 3♣ 7♠ 8♦ K♥, seat 1 deals and keeps
+ * 2♠ 8♣ 9♥ Q♦, the crib is 4♦ 6♠ A♣ J♥ and the starter is 5♥.
  */
 
 export interface LayoutFixture {
@@ -28,6 +29,8 @@ export interface LayoutFixture {
   state: GameState
   /** Cards each seat has picked for the crib, shown raised. */
   selected?: Partial<Record<Seat, CardId[]>>
+  /** How many of the show's counts are on screen (LayoutOptions.showStep). */
+  showStep?: number
 }
 
 const KEPT: [CardId[], CardId[]] = [
@@ -48,7 +51,7 @@ const FIRST_COUNT: [Seat, Action][] = [
   [1, { type: 'play', card: '2S' }],
   [0, { type: 'go' }],
 ]
-/** The dealer can't play either and pegs last card; the pone leads 7♠, dealer 8♣ for fifteen. */
+/** The dealer can't play either and pegs one for the go; the pone leads 7♠, dealer 8♣ for fifteen. */
 const SECOND_COUNT_START: [Seat, Action][] = [
   [0, { type: 'play', card: '7S' }],
   [1, { type: 'play', card: '8C' }],
@@ -102,9 +105,11 @@ function build(): LayoutFixture[] {
   const afterGo = apply(playing, [...FIRST_COUNT, ...SECOND_COUNT_START])
   const show = apply(afterGo, SECOND_COUNT_END)
   if (show.phase !== 'show' || show.show.length !== 3) throw new Error('Fixture: expected the show')
-  const showStep = (n: number): GameState => ({ ...show, show: show.show.slice(0, n) })
+  // The server counts the whole show at once; the screen shows one count at a time. A win
+  // stops the show, though, so a game won on the dealer's hand never counts the crib.
   const won: GameState = {
-    ...showStep(2),
+    ...show,
+    show: show.show.slice(0, 2),
     phase: 'game_over',
     scores: [104, 121],
     previousScores: [96, 112],
@@ -123,21 +128,22 @@ function build(): LayoutFixture[] {
     { id: 'cut', label: 'Cut', state: cut },
     { id: 'play', label: 'Mid-play', state: midPlay },
     { id: 'go', label: 'After a go', state: afterGo },
-    { id: 'show-1', label: 'Show: pone', state: showStep(1) },
-    { id: 'show-2', label: 'Show: dealer', state: showStep(2) },
-    { id: 'show-3', label: 'Show: crib', state: showStep(3) },
+    { id: 'show-1', label: 'Show: pone', state: show, showStep: 1 },
+    { id: 'show-2', label: 'Show: dealer', state: show, showStep: 2 },
+    { id: 'show-3', label: 'Show: crib', state: show, showStep: 3 },
     { id: 'game-over', label: 'Game over', state: won },
   ]
 }
 
 export const LAYOUT_FIXTURES: readonly LayoutFixture[] = build()
 
-/** The fixture as `seat` sees it, and the cards that seat has picked. */
+/** The fixture as `seat` sees it, and the layout options for it (picked cards, show step). */
 export function fixtureView(
   fixture: LayoutFixture,
   seat: Seat,
-): { view: PlayerView; selected: CardId[] } {
+): { view: PlayerView; options: LayoutOptions & { selected: CardId[] } } {
   const view = playerView(fixture.state, seat)
   const selected = (fixture.selected?.[seat] ?? []).filter((c) => view.myHand.includes(c))
-  return { view, selected }
+  const options = { selected, ...(fixture.showStep ? { showStep: fixture.showStep } : {}) }
+  return { view, options }
 }

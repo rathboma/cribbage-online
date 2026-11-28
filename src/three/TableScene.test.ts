@@ -202,6 +202,51 @@ describe('TableScene', () => {
     expect(renderer.render).toHaveBeenCalledTimes(drawn)
   })
 
+  it('keeps the frame out of the insets the HUD covers, on later resizes too', () => {
+    const { scene } = setup()
+    const frame = { x: 0, z: 0, width: 6, depth: 10 }
+    const insets = { top: 100, bottom: 150 }
+    scene.resize(390, 844, 1)
+    scene.setFrame(frame, insets)
+    for (const [width, height] of [
+      [390, 844],
+      [420, 900],
+    ] as const) {
+      scene.resize(width, height, 1)
+      const ys = [-1, 1].flatMap((sx) =>
+        [-1, 1].map((sz) => {
+          const v = new Vector3((sx * frame.width) / 2, 0, (sz * frame.depth) / 2).project(
+            scene.camera,
+          )
+          return ((1 - v.y) / 2) * height
+        }),
+      )
+      expect(Math.min(...ys)).toBeGreaterThanOrEqual(insets.top)
+      expect(Math.max(...ys)).toBeLessThanOrEqual(height - insets.bottom)
+    }
+  })
+
+  it('draws a resize once, even when the layout changed during it', () => {
+    const renderer = fakeRenderer()
+    const frames = manualFrames()
+    const scene: TableScene = new TableScene({
+      createRenderer: () => renderer as unknown as TableRenderer,
+      frames,
+      page: fakePage().visibility,
+      atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
+      onResize: () => {
+        scene.setFrame({ x: 0, z: 0, width: 5, depth: 5 })
+        scene.invalidate()
+      },
+    })
+    scene.mount(document.createElement('canvas'))
+    frames.tick()
+    const drawn = renderer.render.mock.calls.length
+    scene.resize(400, 800, 1)
+    frames.tick()
+    expect(renderer.render).toHaveBeenCalledTimes(drawn + 1)
+  })
+
   it('reports a resize before framing and drawing it, so the layout can change first', () => {
     const renderer = fakeRenderer()
     const order: string[] = []

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Euler, Group, Matrix4, Quaternion, Vector3 } from 'three'
 import type { CardId } from '@shared/engine/cards'
-import type { PlayerView } from '@shared/engine/view'
+import { simulateGame } from '@shared/engine/sim'
+import { playerView, type PlayerView } from '@shared/engine/view'
 import type { Seat } from '@shared/engine/types'
 import { fakeAtlasSources } from '@/test/atlas'
 import { CardLayer } from './applyLayout'
@@ -9,7 +10,7 @@ import { frameCamera, makeCamera, toScreen, type Viewport } from './camera'
 import { AtlasImage, atlasLayout } from './cardAtlas'
 import { CARD_HEIGHT, CARD_THICKNESS, CARD_WIDTH } from './CardMesh'
 import { CardPool } from './CardPool'
-import { computeLayout, type CardTarget, type Layout } from './layout'
+import { computeLayout, type CardTarget, type Layout, type LayoutOptions } from './layout'
 import { LAYOUT_FIXTURES, fixtureView, type LayoutFixture } from './layoutFixtures'
 import type { TableScene } from './TableScene'
 
@@ -34,18 +35,20 @@ const fixture = (id: string): LayoutFixture => {
 function* everyLayout(): Generator<{
   name: string
   view: PlayerView
+  options: LayoutOptions
   viewport: Viewport
   layout: Layout
 }> {
   for (const f of LAYOUT_FIXTURES) {
     for (const seat of SEATS) {
-      const { view, selected } = fixtureView(f, seat)
+      const { view, options } = fixtureView(f, seat)
       for (const viewport of VIEWPORTS) {
         yield {
           name: `${f.id} seat ${seat} at ${viewport.width}×${viewport.height}`,
           view,
+          options,
           viewport,
-          layout: computeLayout(view, viewport, { selected }),
+          layout: computeLayout(view, viewport, options),
         }
       }
     }
@@ -113,22 +116,25 @@ function widestUncovered(target: CardTarget, layout: Layout, viewport: Viewport)
 describe('computeLayout', () => {
   it('is deterministic', () => {
     for (const f of LAYOUT_FIXTURES) {
-      const { view, selected } = fixtureView(f, 0)
-      const first = computeLayout(view, PHONE, { selected })
-      const second = computeLayout(structuredClone(view), { ...PHONE }, { selected: [...selected] })
+      const { view, options } = fixtureView(f, 0)
+      const first = computeLayout(view, PHONE, options)
+      const second = computeLayout(structuredClone(view), { ...PHONE }, structuredClone(options))
       expect(second).toEqual(first)
     }
   })
 
   it('gives every card in the view exactly one target, and the deck one more', () => {
-    for (const { name, view, layout } of everyLayout()) {
+    for (const { name, view, options, layout } of everyLayout()) {
       const keys = layout.cards.map((c) => c.key)
+      // The crib is seen once its count is on screen.
+      const shown = view.show.slice(0, options.showStep ?? view.show.length)
+      const crib = shown.find((r) => r.source === 'crib')?.cards ?? null
       expect(new Set(keys).size, name).toBe(keys.length)
 
       // Each card this seat can see is on the table once, face and all...
       const visible: CardId[] = [
         ...view.myHand,
-        ...(view.crib ?? view.myDiscards),
+        ...(crib ?? view.myDiscards),
         ...view.played[0],
         ...view.played[1],
         ...(view.starter ? [view.starter] : []),
@@ -136,8 +142,7 @@ describe('computeLayout', () => {
       const faces = layout.cards.flatMap((c) => (c.face ? [c.face] : []))
       expect([...faces].sort(), name).toEqual([...visible].sort())
       // ...and every card it can't see is there too, as a slot with no face.
-      const hidden =
-        view.opponentHandCount + (view.crib ? 0 : view.cribCount - view.myDiscards.length)
+      const hidden = view.opponentHandCount + (crib ? 0 : view.cribCount - view.myDiscards.length)
       const blank = layout.cards.filter((c) => c.face === null && c.zone !== 'deck')
       expect(blank, name).toHaveLength(hidden)
       expect(
@@ -199,13 +204,24 @@ describe('computeLayout', () => {
       })),
       { ...fixtureView(fixture('discard'), 0), name: 'two picked, seat 0' },
     ]
-    for (const { view, selected, name } of cases) {
-      const layout = computeLayout(view, PHONE, { selected })
-      const hand = layout.cards.filter((c) => c.zone === 'my-hand')
-      expect(hand).toHaveLength(6)
-      for (const card of hand) {
-        const width = widestUncovered(card, layout, PHONE)
-        expect(width, `${name}: ${card.key}`).toBeGreaterThanOrEqual(MIN_TAP_PX)
+    // The whole 360×640 screen; the same with the HUD laid over it; the canvas left between
+    // the HUD's bars when it is laid out around the table; and the phone on its side.
+    const canvases: Viewport[] = [
+      PHONE,
+      { width: 360, height: 640, insets: { top: 90, bottom: 130 } },
+      { width: 360, height: 400 },
+      { width: 640, height: 360 },
+    ]
+    for (const viewport of canvases) {
+      for (const { view, options, name } of cases) {
+        const layout = computeLayout(view, viewport, options)
+        const hand = layout.cards.filter((c) => c.zone === 'my-hand')
+        expect(hand).toHaveLength(6)
+        for (const card of hand) {
+          const width = widestUncovered(card, layout, viewport)
+          const where = `${JSON.stringify(viewport)} ${name}: ${card.key}`
+          expect(width, where).toBeGreaterThanOrEqual(MIN_TAP_PX)
+        }
       }
     }
   })
@@ -221,7 +237,8 @@ describe('computeLayout', () => {
   })
 
   it('raises the cards picked for the crib out of the hand', () => {
-    const { view, selected } = fixtureView(fixture('discard'), 0)
+    const { view, options } = fixtureView(fixture('discard'), 0)
+    const { selected } = options
     expect(selected).toHaveLength(2)
     const flat = computeLayout(view, PHONE).cards
     const picked = computeLayout(view, PHONE, { selected }).cards
@@ -303,8 +320,8 @@ describe('computeLayout', () => {
       ['show-3', ['4D', '6S', 'AC', 'JH']],
     ] as const) {
       for (const seat of SEATS) {
-        const { view } = fixtureView(fixture(id), seat)
-        const spread = computeLayout(view, PHONE).cards.filter((c) => c.zone === 'show')
+        const { view, options } = fixtureView(fixture(id), seat)
+        const spread = computeLayout(view, PHONE, options).cards.filter((c) => c.zone === 'show')
         expect(spread.map((c) => c.face).sort(), `${id} seat ${seat}`).toEqual(
           ['5H', ...counted].sort(),
         )
@@ -315,8 +332,8 @@ describe('computeLayout', () => {
   })
 
   it('in the show, turns every laid card face up', () => {
-    const { view } = fixtureView(fixture('show-1'), 0)
-    const laid = computeLayout(view, PHONE).cards.filter((c) => c.zone.endsWith('played'))
+    const { view, options } = fixtureView(fixture('show-1'), 0)
+    const laid = computeLayout(view, PHONE, options).cards.filter((c) => c.zone.endsWith('played'))
     expect(laid).toHaveLength(4)
     for (const c of laid) expect(c.faceUp).toBe(true)
   })
@@ -327,6 +344,52 @@ describe('computeLayout', () => {
     expect(computeLayout(view, { width: 390, height: 844 }).mode).toBe('portrait')
     expect(computeLayout(view, { width: 1440, height: 900 }).mode).toBe('landscape')
     expect(computeLayout(view, { width: 844, height: 390 }).mode).toBe('landscape')
+  })
+
+  it('steps through the show, turning the crib over only when its count is shown', () => {
+    // A live view in the show always holds all three counts.
+    const { view } = fixtureView(fixture('show-3'), 0)
+    expect(view.show).toHaveLength(3)
+    expect(view.crib).not.toBeNull()
+    const at = (showStep: number) => computeLayout(view, PHONE, { showStep }).cards
+    for (const step of [1, 2]) {
+      const crib = at(step).filter((c) => c.zone === 'crib')
+      expect(crib.map((c) => c.face)).toEqual(['4D', '6S', null, null])
+      expect(crib.map((c) => c.key)).toContain('1:crib-opp-0')
+    }
+    // Left to right: the starter, then the crib as counted.
+    const spread = at(3).filter((c) => c.zone === 'show')
+    spread.sort((a, b) => a.position.x - b.position.x)
+    expect(spread.map((c) => c.face)).toEqual(['5H', ...view.show[2]!.cards])
+    // Before the first count is shown, the laid cards are as the play left them.
+    const before = at(0)
+    expect(before.filter((c) => c.zone === 'show')).toEqual([])
+    expect(before.filter((c) => c.zone === 'starter')).toHaveLength(1)
+  })
+
+  it('stays in the arrangement it is in until the other is clearly better', () => {
+    const { view } = fixtureView(fixture('deal'), 0)
+    // Find the boundary: the narrowest canvas 600 px tall that lays out wide.
+    let width = 400
+    while (computeLayout(view, { width, height: 600 }).mode === 'portrait') width += 5
+    const near = { width: width + 5, height: 600 }
+    expect(computeLayout(view, near).mode).toBe('landscape')
+    expect(computeLayout(view, near, { previousMode: 'portrait' }).mode).toBe('portrait')
+    const far = { width: width * 1.6, height: 600 }
+    expect(computeLayout(view, far, { previousMode: 'portrait' }).mode).toBe('landscape')
+  })
+
+  it('widens the frame to fill a screen wider than it needs, and spreads the hand into it', () => {
+    const { view } = fixtureView(fixture('deal'), 0)
+    const tall = computeLayout(view, { width: 360, height: 640 })
+    const squat = computeLayout(view, { width: 360, height: 420 })
+    expect(squat.mode).toBe('portrait')
+    expect(squat.frame.width).toBeGreaterThan(tall.frame.width)
+    const spread = (layout: Layout) => {
+      const xs = layout.cards.filter((c) => c.zone === 'my-hand').map((c) => c.position.x)
+      return Math.max(...xs) - Math.min(...xs)
+    }
+    expect(spread(squat)).toBeGreaterThan(spread(tall))
   })
 
   it('copes with an empty viewport', () => {
@@ -349,6 +412,80 @@ describe('computeLayout', () => {
         const screen = toScreen(camera, viewport, p)
         expect(screen.y).toBeGreaterThanOrEqual(120)
         expect(screen.y).toBeLessThanOrEqual(844 - 160)
+      }
+    }
+  })
+})
+
+/** Do two convex outlines on the table (x, z) overlap by more than a hair? */
+function overlaps(a: { x: number; z: number }[], b: { x: number; z: number }[]): boolean {
+  for (const shape of [a, b]) {
+    for (let i = 0; i < shape.length; i++) {
+      const p = shape[i]!
+      const q = shape[(i + 1) % shape.length]!
+      const axis = { x: q.z - p.z, z: p.x - q.x }
+      const project = (s: { x: number; z: number }[]) => s.map((v) => v.x * axis.x + v.z * axis.z)
+      const pa = project(a)
+      const pb = project(b)
+      const length = Math.hypot(axis.x, axis.z)
+      const gap = Math.max(Math.min(...pb) - Math.max(...pa), Math.min(...pa) - Math.max(...pb))
+      if (gap / length > -0.02) return false
+    }
+  }
+  return true
+}
+
+/** A card's outline on the table, going round. */
+function footprint(target: CardTarget) {
+  const [a, b, c, d] = corners(target).map((p) => ({ x: p.x, z: p.z }))
+  return [a!, b!, d!, c!]
+}
+
+describe('computeLayout over whole games', () => {
+  it('fits every state of simulated games, with no zone lying on another', () => {
+    const states = [] as Parameters<typeof playerView>[0][]
+    for (const seed of ['sweep-1', 'sweep-2', 'sweep-3']) {
+      simulateGame(seed, { onStep: ({ after }) => void states.push(after) })
+    }
+    expect(states.length).toBeGreaterThan(200)
+    const canvases: Viewport[] = [PHONE, { width: 1440, height: 900 }]
+    for (const state of states) {
+      for (const seat of SEATS) {
+        const view = playerView(state, seat)
+        for (const viewport of canvases) {
+          const layout = computeLayout(view, viewport)
+          const name = `hand ${view.hand} ${view.phase} seat ${seat} ${viewport.width}`
+          const keys = new Set(layout.cards.map((c) => c.key))
+          expect(keys.size, name).toBe(layout.cards.length)
+          const camera = makeCamera()
+          frameCamera(camera, layout.frame, viewport)
+          const outlines = layout.cards.map((card) => {
+            for (const p of corners(card)) {
+              const ndc = p.clone().project(camera)
+              expect(
+                Math.max(Math.abs(ndc.x), Math.abs(ndc.y)),
+                `${name} ${card.key}`,
+              ).toBeLessThanOrEqual(1)
+            }
+            return { card, outline: footprint(card) }
+          })
+          // Cards in one zone may overlap (a fan, a pile); different zones never do, but the
+          // starter lies on the deck.
+          const clash = outlines.flatMap((a, i) =>
+            outlines
+              .slice(i + 1)
+              .filter((b) => a.card.zone !== b.card.zone)
+              .filter(
+                (b) =>
+                  !['deck', 'starter'].every((z) =>
+                    [a.card.zone, b.card.zone].includes(z as never),
+                  ),
+              )
+              .filter((b) => overlaps(a.outline, b.outline))
+              .map((b) => `${a.card.key}/${b.card.key}`),
+          )
+          expect(clash, name).toEqual([])
+        }
       }
     }
   })
@@ -377,9 +514,9 @@ describe('CardLayer', () => {
       const meshesSeen = new Set<object>()
       const dealtMeshes = new Set<object>()
       HAND.forEach((id, step) => {
-        const { view, selected } = fixtureView(fixture(id), seat)
-        const layout = computeLayout(view, PHONE, { selected })
-        for (const { target, mesh } of layer.reconcile(layout)) {
+        const { view, options } = fixtureView(fixture(id), seat)
+        const layout = computeLayout(view, PHONE, options)
+        for (const { target, mesh } of layer.reconcile(layout).placed) {
           if (!history.has(target.key)) history.set(target.key, new Set())
           history.get(target.key)!.add(mesh)
           meshesSeen.add(mesh)
@@ -397,8 +534,8 @@ describe('CardLayer', () => {
   it('snaps each mesh to its target and puts it on the table', () => {
     const scene = fakeScene()
     const layer = new CardLayer(scene)
-    const { view, selected } = fixtureView(fixture('discard'), 0)
-    const layout = computeLayout(view, PHONE, { selected })
+    const { view, options } = fixtureView(fixture('discard'), 0)
+    const layout = computeLayout(view, PHONE, options)
     layer.apply(layout)
     expect(scene.table.children).toHaveLength(layout.cards.length)
     for (const target of layout.cards) {
@@ -414,7 +551,7 @@ describe('CardLayer', () => {
       expect(mesh.face).toBe(target.face)
       expect(mesh.faceUp).toBe(target.faceUp)
     }
-    expect(scene.setFrame).toHaveBeenCalledWith(layout.frame)
+    expect(scene.setFrame).toHaveBeenCalledWith(layout.frame, layout.insets)
     expect(scene.invalidate).toHaveBeenCalled()
   })
 
@@ -429,5 +566,52 @@ describe('CardLayer', () => {
     layer.clear()
     expect(scene.cards.inUse).toBe(0)
     expect(scene.table.children).toHaveLength(0)
+  })
+})
+
+describe('CardLayer for the animation director', () => {
+  function fakeScene() {
+    const image = new AtlasImage(atlasLayout(4096), fakeAtlasSources().sources)
+    const scene = {
+      cards: new CardPool({ image }),
+      table: new Group(),
+      setFrame: vi.fn(),
+      invalidate: vi.fn(),
+    }
+    return scene as typeof scene & TableScene
+  }
+
+  it('says which cards are new and keeps leaving ones on the table until released', () => {
+    const scene = fakeScene()
+    const layer = new CardLayer(scene)
+    const first = layer.reconcile(computeLayout(fixtureView(fixture('lobby'), 0).view, PHONE))
+    expect(first.placed.map((p) => p.entering)).toEqual([true])
+    // The deal: the deck stays, twelve cards come in.
+    const deal = layer.reconcile(computeLayout(fixtureView(fixture('deal'), 0).view, PHONE))
+    expect(deal.placed.filter((p) => p.entering)).toHaveLength(12)
+    expect(deal.placed.find((p) => p.target.key === 'deck')!.entering).toBe(false)
+    expect(deal.leaving).toEqual([])
+
+    // Back to before the deal: twelve cards leave, and stay on the table, unmoved, for now.
+    const meshes = deal.placed.filter((p) => p.target.key !== 'deck').map((p) => p.mesh)
+    meshes[0]!.position.set(1, 2, 3)
+    const gather = layer.reconcile(computeLayout(fixtureView(fixture('lobby'), 0).view, PHONE))
+    expect(new Set(gather.leaving)).toEqual(new Set(meshes))
+    expect(scene.table.children).toHaveLength(13)
+    expect(meshes[0]!.position.toArray()).toEqual([1, 2, 3])
+    expect(scene.cards.inUse).toBe(13)
+    layer.release(gather.leaving)
+    expect(scene.table.children).toHaveLength(1)
+    expect(scene.cards.inUse).toBe(1)
+  })
+
+  it('releases leaving cards nobody released at the next reconcile', () => {
+    const scene = fakeScene()
+    const layer = new CardLayer(scene)
+    layer.reconcile(computeLayout(fixtureView(fixture('deal'), 0).view, PHONE))
+    layer.reconcile(computeLayout(fixtureView(fixture('lobby'), 0).view, PHONE))
+    expect(scene.cards.inUse).toBe(13)
+    layer.reconcile(computeLayout(fixtureView(fixture('lobby'), 0).view, PHONE))
+    expect(scene.cards.inUse).toBe(1)
   })
 })

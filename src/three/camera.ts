@@ -43,7 +43,8 @@ export function makeCamera(): PerspectiveCamera {
   return new PerspectiveCamera(CAMERA_FOV, 1, 0.5, 200)
 }
 
-function insetsOf(viewport: Viewport): Insets {
+/** The viewport's insets, with zero for any not given. */
+export function insetsOf(viewport: Viewport): Insets {
   const { top = 0, right = 0, bottom = 0, left = 0 } = viewport.insets ?? {}
   return { top, right, bottom, left }
 }
@@ -68,9 +69,49 @@ export function frameCamera(
   frame: TableRect,
   viewport: Viewport,
 ): number {
+  const distance = fitInner(camera, frame, viewport)
+  // ...then widened to the whole canvas, so the inner box shows exactly what was fitted and the
+  // insets show more of the table around it.
   const insets = insetsOf(viewport)
+  if (insets.top || insets.right || insets.bottom || insets.left) {
+    camera.setViewOffset(
+      innerSize(viewport).width,
+      innerSize(viewport).height,
+      -insets.left,
+      -insets.top,
+      viewport.width,
+      viewport.height,
+    )
+    camera.updateProjectionMatrix()
+  }
+  return distance
+}
+
+/**
+ * How `frame` fits `viewport`: the camera distance (as frameCamera), and how wide the frame
+ * could be, keeping its depth, for the camera to stay where it is. That is the frame's own width
+ * when width is what limits the camera, and more when depth does: the room to the sides that
+ * would otherwise be empty felt.
+ */
+export function fitFrame(
+  frame: TableRect,
+  viewport: Viewport,
+): { distance: number; widest: number } {
+  const camera = makeCamera()
+  const distance = fitInner(camera, frame, viewport)
+  // Every point along an edge of the frame is the same distance in front of the camera (it
+  // only leans back), so on screen x grows in proportion to x on the table along it.
+  const widthAt = (z: number) => {
+    const p = new Vector3(frame.x + frame.width / 2, 0, z).project(camera)
+    return (frame.width * (1 - VIEW_MARGIN)) / Math.max(Math.abs(p.x), 1e-9)
+  }
+  const widest = Math.min(widthAt(frame.z + frame.depth / 2), widthAt(frame.z - frame.depth / 2))
+  return { distance, widest: Math.max(frame.width, widest) }
+}
+
+/** Fits the frame to the inner box, as if it were the whole canvas. */
+function fitInner(camera: PerspectiveCamera, frame: TableRect, viewport: Viewport): number {
   const inner = innerSize(viewport)
-  // Fitted to the inner box as if it were the whole canvas...
   camera.aspect = inner.width / inner.height
   camera.clearViewOffset()
   camera.updateProjectionMatrix()
@@ -106,20 +147,6 @@ export function frameCamera(
     else near = mid
   }
   place(far)
-
-  // ...then widened to the whole canvas, so the inner box shows exactly what was fitted and the
-  // insets show more of the table around it.
-  if (insets.top || insets.right || insets.bottom || insets.left) {
-    camera.setViewOffset(
-      inner.width,
-      inner.height,
-      -insets.left,
-      -insets.top,
-      viewport.width,
-      viewport.height,
-    )
-    camera.updateProjectionMatrix()
-  }
   return far
 }
 

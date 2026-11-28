@@ -19,7 +19,14 @@ import {
 } from 'three'
 import { colors } from '@/design/tokens'
 import { Animator } from './anim'
-import { frameCamera, makeCamera, type TableRect, type Viewport } from './camera'
+import {
+  frameCamera,
+  insetsOf,
+  makeCamera,
+  type Insets,
+  type TableRect,
+  type Viewport,
+} from './camera'
 import { cardAtlasImage, type AtlasImage } from './cardAtlas'
 import { CardPool } from './CardPool'
 
@@ -41,7 +48,10 @@ import { CardPool } from './CardPool'
 export const PLAY_AREA = { width: 8, depth: 11 } as const
 
 /** The whole table top (felt), larger than the play area so the felt fills a phone screen. */
-export const TABLE = { width: 26, depth: 24, railWidth: 0.7, railHeight: 0.18 } as const
+export const TABLE = { width: 32, depth: 24, railWidth: 0.7, railHeight: 0.18 } as const
+
+/** The felt is fully lit out to about half this from the centre, then darkens to the rail. */
+const LIT_AREA = { width: 9.5, depth: 9.5 } as const
 
 /** Sharper than this costs a lot of fill rate on phones for little visible gain. */
 export const MAX_PIXEL_RATIO = 2
@@ -83,7 +93,7 @@ export interface TableSceneOptions {
   /**
    * Called when the canvas changes size, before the camera is framed and the frame drawn: the
    * place to lay the table out again for the new shape (and call setFrame), so no frame is
-   * ever drawn with the old layout.
+   * ever drawn with the old layout. The viewport has no insets: add the HUD's own.
    */
   onResize?: (viewport: Viewport) => void
   /** Whether the page is hidden, and its `visibilitychange` events: `document` by default. */
@@ -130,6 +140,7 @@ export class TableScene {
   private report: DisposeReport | null = null
   private size: Viewport | null = null
   private frameRect: TableRect = { x: 0, z: 0, ...PLAY_AREA }
+  private frameInsets: Insets = insetsOf({ width: 0, height: 0 })
 
   private readonly createRenderer: (canvas: HTMLCanvasElement) => TableRenderer
   private readonly scheduler: FrameScheduler
@@ -195,18 +206,36 @@ export class TableScene {
     return this.size && { ...this.size }
   }
 
+  /** The canvas as the camera frames it: its size and the insets kept clear. */
+  private get framing(): Viewport | null {
+    return this.size && { ...this.size, insets: this.frameInsets }
+  }
+
   /** The part of the table the camera keeps in view. */
   get viewFrame(): TableRect {
     return { ...this.frameRect }
   }
 
-  /** Frames the camera on another part of the table (from a layout) and redraws. */
-  setFrame(frame: TableRect): void {
+  /**
+   * Frames the camera on another part of the table (from a layout), keeping it out of the
+   * insets (parts of the canvas the HUD covers), and redraws.
+   */
+  setFrame(frame: TableRect, insets: Partial<Insets> = {}): void {
+    const next = insetsOf({ width: 0, height: 0, insets })
     const f = this.frameRect
-    if (f.x === frame.x && f.z === frame.z && f.width === frame.width && f.depth === frame.depth)
-      return
+    const i = this.frameInsets
+    const sameFrame =
+      f.x === frame.x && f.z === frame.z && f.width === frame.width && f.depth === frame.depth
+    const sameInsets =
+      i.top === next.top &&
+      i.right === next.right &&
+      i.bottom === next.bottom &&
+      i.left === next.left
+    if (sameFrame && sameInsets) return
     this.frameRect = { ...frame }
-    if (this.size) frameCamera(this.camera, this.frameRect, this.size)
+    this.frameInsets = next
+    const framing = this.framing
+    if (framing) frameCamera(this.camera, this.frameRect, framing)
     this.invalidate()
   }
 
@@ -245,8 +274,13 @@ export class TableScene {
     renderer.setSize(width, height, false)
     this.size = { width, height }
     this.onResize?.({ width, height })
-    frameCamera(this.camera, this.frameRect, this.size)
+    frameCamera(this.camera, this.frameRect, this.framing!)
     this.draw()
+    // Drawn just now, so a frame onResize asked for would only draw the same again.
+    if (this.frameHandle !== null && !this.animator.busy) {
+      this.scheduler.cancel(this.frameHandle)
+      this.frameHandle = null
+    }
   }
 
   /** Something changed: draw a frame soon (once, however many times this is called). */
@@ -414,8 +448,10 @@ function feltGeometry(): PlaneGeometry {
   const shade = new Float32Array(position.count * 3)
   for (let i = 0; i < position.count; i++) {
     // The plane lies in x/y before it is turned flat; y becomes -z.
-    const dx = position.getX(i) / (PLAY_AREA.width * 0.8)
-    const dy = position.getY(i) / (PLAY_AREA.depth * 0.8)
+    // Wide enough to light both arrangements: the landscape one's deck and crib at the sides
+    // and the portrait one's hands at the near and far edges.
+    const dx = position.getX(i) / LIT_AREA.width
+    const dy = position.getY(i) / LIT_AREA.depth
     const t = MathUtils.smoothstep(Math.hypot(dx, dy), 0.45, 1.5)
     shade.fill(1 - 0.42 * t, i * 3, i * 3 + 3)
   }

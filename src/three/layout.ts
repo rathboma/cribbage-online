@@ -3,7 +3,7 @@ import type { PlayerView } from '@shared/engine/view'
 import { otherSeat, type Seat } from '@shared/engine/types'
 import { DISCARD_COUNT, HAND_SIZE } from '@shared/engine/game'
 import { CARD_HEIGHT, CARD_THICKNESS, CARD_WIDTH } from './CardMesh'
-import { frameCamera, makeCamera, type TableRect, type Viewport } from './camera'
+import { fitFrame, insetsOf, type Insets, type TableRect, type Viewport } from './camera'
 
 /**
  * The layout engine: where every card belongs on the table for a PlayerView, at a given canvas
@@ -18,9 +18,10 @@ import { frameCamera, makeCamera, type TableRect, type Viewport } from './camera
  * slots it may have been in listed in `from`, and the mesh of whichever of those slots has just
  * gone is reused. A new hand starts with new keys: its cards are freshly dealt.
  *
- * Two arrangements, chosen by whichever makes this player's cards bigger on screen: `portrait`
- * stacks everything down a narrow table (phones held upright), `landscape` puts the deck and
- * crib to the right of the play and the board to its left.
+ * Two arrangements, chosen by whichever gives this player's hand the most room on screen:
+ * `portrait` stacks everything down a narrow table (phones held upright), `landscape` puts the
+ * deck and crib to the right of the play and the board to its left. Either one widens to fill a
+ * screen wider than it needs, and the hand spreads out into the extra room.
  */
 
 export type LayoutMode = 'portrait' | 'landscape'
@@ -68,6 +69,8 @@ export interface Layout {
   mode: LayoutMode
   /** The part of the table the camera keeps in view. */
   frame: TableRect
+  /** The parts of the canvas the camera keeps the frame out of (from the viewport). */
+  insets: Insets
   /** Kept clear of cards for the cribbage board (P4.6), lengthwise along its longer side. */
   board: TableRect
   cards: CardTarget[]
@@ -76,7 +79,22 @@ export interface Layout {
 export interface LayoutOptions {
   /** Cards picked for the crib, shown raised in the hand. */
   selected?: readonly CardId[]
+  /**
+   * How many of the show's counts are on screen: the server counts both hands and the crib at
+   * once, and the animation director presents them one at a time. The last one shown is spread
+   * out; the crib is turned over only once its count is shown. All of them by default.
+   */
+  showStep?: number
+  /**
+   * The arrangement on screen now. The other one is taken only if it is clearly better, so a
+   * canvas whose shape hovers near the boundary (a panel opening, say) doesn't make the whole
+   * table jump back and forth.
+   */
+  previousMode?: LayoutMode
 }
+
+/** How much more room the other arrangement must give the hand before the table changes to it. */
+const SWITCH_MARGIN = 1.12
 
 /** A deck block is this many times as thick per card as CARD_THICKNESS (real cards are thin). */
 export const DECK_THICKNESS_PER_CARD = 0.5
@@ -92,9 +110,12 @@ interface FanSpec {
   scale: number
   /** Centre to centre, at most. */
   spacing: number
-  /** The whole fan is never wider than this. */
+  /** The whole fan is never wider than this, however much room there is. */
   maxWidth: number
 }
+
+/** Kept between a fan and the edge of the frame. */
+const FAN_EDGE = 0.3
 
 interface RowSpec {
   /** The centre of the row of four. */
@@ -129,7 +150,7 @@ const PORTRAIT: Arrangement = {
   frame: { x: 0, z: 0, width: 6.6, depth: 10.7 },
   board: { x: 0, z: -3.2, width: 6, depth: 1.1 },
   opponentHand: { x: 0, z: -4.55, scale: 0.75, spacing: 0.42, maxWidth: 3 },
-  myHand: { x: 0, z: 4.15, scale: 1.2, spacing: 0.95, maxWidth: 5.9 },
+  myHand: { x: 0, z: 4.15, scale: 1.2, spacing: 1.2, maxWidth: 7.2 },
   deck: { x: 2.35, z: 0 },
   crib: { mine: { x: 2.35, z: 1.75 }, theirs: { x: 2.35, z: -1.75 } },
   played: {
@@ -152,7 +173,8 @@ const LANDSCAPE: Arrangement = {
   frame: { x: 0, z: 0, width: 11.4, depth: 7.8 },
   board: { x: -4.8, z: 0, width: 1.4, depth: 6 },
   opponentHand: { x: 0, z: -3.1, scale: 0.75, spacing: 0.42, maxWidth: 3 },
-  myHand: { x: 0, z: 2.8, scale: 1.15, spacing: 0.95, maxWidth: 5.6 },
+  // Never wider than the gap between the board and the crib piles.
+  myHand: { x: 0, z: 2.8, scale: 1.15, spacing: 1.05, maxWidth: 7.6 },
   deck: { x: 4.6, z: 0 },
   crib: { mine: { x: 4.6, z: 1.75 }, theirs: { x: 4.6, z: -1.75 } },
   played: {
@@ -166,11 +188,6 @@ const LANDSCAPE: Arrangement = {
   showSpread: { x: 0, z: 0, scale: 1.15, spacing: 0.9 },
 }
 
-export const ARRANGEMENTS: Record<LayoutMode, Arrangement> = {
-  portrait: PORTRAIT,
-  landscape: LANDSCAPE,
-}
-
 /** Fan angle between neighbouring cards in a hand, radians. */
 const FAN_ANGLE = 0.045
 /** How far the outer cards of a fan drop back, per (card index from the middle)². */
@@ -182,21 +199,38 @@ const PILE_TWIST = [0.06, -0.05, 0.035, -0.02]
 
 const ZERO: Vec3 = { x: 0, y: 0, z: 0 }
 
-/** The arrangement that shows this player's hand biggest in `viewport`. */
-export function chooseArrangement(viewport: Viewport): Arrangement {
-  if (!(viewport.width > 0 && viewport.height > 0)) return PORTRAIT
-  const camera = makeCamera()
-  let best = PORTRAIT
-  let bestSize = -Infinity
-  for (const arrangement of [PORTRAIT, LANDSCAPE]) {
-    // Apparent size goes with scale over distance (the field of view is the same).
-    const size = arrangement.myHand.scale / frameCamera(camera, arrangement.frame, viewport)
-    if (size > bestSize + 1e-9) {
-      best = arrangement
-      bestSize = size
-    }
+/** An arrangement fitted to a viewport: widened to fill it, with the room the hand has. */
+interface Fitted {
+  arrangement: Arrangement
+  frame: TableRect
+  /** How wide this player's hand may fan. */
+  handWidth: number
+  /** Centre to centre between the cards of a full hand, as it appears on screen (any unit). */
+  room: number
+}
+
+function fit(arrangement: Arrangement, viewport: Viewport): Fitted {
+  const { distance, widest } = fitFrame(arrangement.frame, viewport)
+  const frame = { ...arrangement.frame, width: widest }
+  const spec = arrangement.myHand
+  const handWidth = Math.min(spec.maxWidth, frame.width - 2 * FAN_EDGE)
+  const spacing = fanSpacing(spec, handWidth, HAND_SIZE)
+  // On screen, sizes on the table go as one over the distance (the field of view is fixed).
+  return { arrangement, frame, handWidth, room: spacing / distance }
+}
+
+/** The arrangement that gives this player's hand the most room in `viewport`. */
+export function chooseArrangement(viewport: Viewport, previousMode?: LayoutMode): Fitted {
+  if (!(viewport.width > 0 && viewport.height > 0)) {
+    const frame = { ...PORTRAIT.frame }
+    return { arrangement: PORTRAIT, frame, handWidth: frame.width - 2 * FAN_EDGE, room: 0 }
   }
-  return best
+  const portrait = fit(PORTRAIT, viewport)
+  const landscape = fit(LANDSCAPE, viewport)
+  const bias = (mode: LayoutMode) => (mode === previousMode ? SWITCH_MARGIN : 1)
+  return landscape.room * bias('landscape') > portrait.room * bias('portrait')
+    ? landscape
+    : portrait
 }
 
 /** Where every card in `view` goes on a table drawn at `viewport`. */
@@ -205,7 +239,8 @@ export function computeLayout(
   viewport: Viewport,
   options: LayoutOptions = {},
 ): Layout {
-  const a = chooseArrangement(viewport)
+  const fitted = chooseArrangement(viewport, options.previousMode)
+  const a = fitted.arrangement
   const me = view.seat
   const opponent = otherSeat(me)
   const hand = view.hand
@@ -231,8 +266,11 @@ export function computeLayout(
     stack: deckCount * DECK_THICKNESS_PER_CARD,
   })
 
-  const inShow = view.show.length > 0
-  const counting = inShow ? view.show[view.show.length - 1]! : null
+  // The counts on screen so far: all of them unless the director is stepping through.
+  const step = Math.max(0, Math.min(view.show.length, options.showStep ?? view.show.length))
+  const shown = view.show.slice(0, step)
+  const inShow = shown.length > 0
+  const counting = inShow ? shown[shown.length - 1]! : null
 
   // The hand or crib being counted: the starter first, then its cards, across the middle.
   const spread = new Map<CardId, number>()
@@ -277,7 +315,7 @@ export function computeLayout(
   }
 
   // This player's hand: face up, fanned along the near edge, picked cards raised.
-  fan(a.myHand, view.myHand.length, false).forEach((place, i) => {
+  fan(a.myHand, fitted.handWidth, view.myHand.length, false).forEach((place, i) => {
     const card = view.myHand[i]!
     const raised = selected.has(card)
     add({
@@ -287,8 +325,8 @@ export function computeLayout(
       zone: 'my-hand',
       position: {
         x: place.x,
-        // Slid away from the player, still under the card to its right, as in a real hand.
         y: place.y,
+        // Slid away from the player, still under the card to its right, as in a real hand.
         z: place.z - (raised ? RAISE * CARD_HEIGHT * a.myHand.scale : 0),
       },
       rotation: { x: 0, y: place.yaw, z: 0 },
@@ -297,7 +335,8 @@ export function computeLayout(
   })
 
   // The opponent's hand: face down along the far edge, by slot.
-  fan(a.opponentHand, view.opponentHandCount, true).forEach((place, i) => {
+  const theirs = a.opponentHand
+  fan(theirs, theirs.maxWidth, view.opponentHandCount, true).forEach((place, i) => {
     add({
       key: opponentSlot(i),
       face: null,
@@ -314,14 +353,15 @@ export function computeLayout(
   // The crib, on the dealer's side: face down, until it is counted.
   const cribAt = view.dealer === me ? a.crib.mine : a.crib.theirs
   const cribSlots = [cribSlot(0), cribSlot(1)]
-  const cribCounted = view.crib !== null
+  // Turned over once its count is on screen (the view has its cards from when it is counted).
+  const cribShown = shown.find((r) => r.source === 'crib')?.cards ?? null
   const cribCards: { key: string; face: CardId | null; from?: string[] }[] = []
-  if (cribCounted) {
+  if (cribShown) {
     const mine = new Set(view.myDiscards)
     // This player's two first, as they were in the pile, then the opponent's.
     const ordered = [
-      ...view.crib!.filter((c) => mine.has(c)),
-      ...view.crib!.filter((c) => !mine.has(c)),
+      ...cribShown.filter((c) => mine.has(c)),
+      ...cribShown.filter((c) => !mine.has(c)),
     ]
     for (const card of ordered) {
       cribCards.push({
@@ -391,7 +431,19 @@ export function computeLayout(
     })
   }
 
-  return { mode: a.mode, frame: { ...a.frame }, board: { ...a.board }, cards }
+  return {
+    mode: a.mode,
+    frame: fitted.frame,
+    insets: insetsOf(viewport),
+    board: { ...a.board },
+    cards,
+  }
+}
+
+/** Centre to centre between `count` cards fanned no wider than `width`. */
+function fanSpacing(spec: FanSpec, width: number, count: number): number {
+  if (count < 2) return 0
+  return Math.max(0, Math.min(spec.spacing, (width - CARD_WIDTH * spec.scale) / (count - 1)))
 }
 
 /** The height of the centre of the `index`th card (from the bottom) in a pile or overlap. */
@@ -407,12 +459,12 @@ function stackY(scale: number, index: number): number {
  */
 function fan(
   spec: FanSpec,
+  width: number,
   count: number,
   far: boolean,
 ): { x: number; y: number; z: number; yaw: number }[] {
   if (count === 0) return []
-  const cardWidth = CARD_WIDTH * spec.scale
-  const spacing = count > 1 ? Math.min(spec.spacing, (spec.maxWidth - cardWidth) / (count - 1)) : 0
+  const spacing = fanSpacing(spec, width, count)
   const middle = (count - 1) / 2
   return Array.from({ length: count }, (_, i) => {
     const offset = i - middle
