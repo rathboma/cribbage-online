@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CardId, PlayerView } from '@shared/protocol'
 import { playerView, viewWhen, workedExample } from '@/test/game'
-import { canUseCard, handCardState, tapCard } from './handInput'
+import { canUseCard, deckState, handCardState, tapCard } from './handInput'
 
 const discarding = (seat: 0 | 1) => viewWhen(seat, (s) => s.phase === 'discard')
 
@@ -57,5 +57,16 @@ describe('hand input', () => {
   it('ignores a card that is not in the hand', () => {
     const view = playerView(workedExample(), 0)
     expect(tapCard(view, [], false, 'AS')).toBeNull()
+  })
+
+  it('lets the pone, and nobody else, tap the deck to cut', () => {
+    const cutting = (s: { phase: string }) => s.phase === 'cut'
+    const [a, b] = [viewWhen(0, cutting), viewWhen(1, cutting)]
+    const pone = a.legal.cut ? a : b
+    const dealer = a.legal.cut ? b : a
+    expect(deckState(pone, false)).toBe('usable')
+    expect(deckState(pone, true)).toBe('idle')
+    expect(deckState(dealer, false)).toBeNull()
+    expect(deckState(playerView(workedExample(), 0), false)).toBeNull()
   })
 })

@@ -470,11 +470,39 @@ describe('game screen with the 3D table', () => {
     expect(button.attributes('aria-expanded')).toBe('false')
   })
 
-  it('offers keyboard players the simple table from inside the 3D one', async () => {
+  it('offers keyboard players the simple table from inside the 3D one, focus and all', async () => {
     const wrapper = await open3d(workedExample())
-    await wrapper.get(testId('use-simple-table')).trigger('click')
+    const button = wrapper.get(testId('use-simple-table'))
+    ;(button.element as HTMLElement).focus()
+    await button.trigger('click')
+    await flushPromises()
     expect(wrapper.find(testId('dom-table')).exists()).toBe(true)
     expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('2d')
+    // The button went with the 3D table; focus goes on to the hand they can now play.
+    const focused = document.activeElement as HTMLElement
+    expect(focused.dataset.testid).toBe('hand-card')
+    expect(focused.dataset.card).toBe('3C')
+  })
+
+  it('puts focus on the heading when there is no hand to go to', async () => {
+    const shown = playMoves(workedExample(), WORKED_EXAMPLE_MOVES).state
+    const wrapper = await open3d(shown)
+    await wrapper.get(testId('use-simple-table')).trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+  })
+
+  it('closes the menu when focus moves on past it', async () => {
+    const wrapper = await open3d(workedExample())
+    const button = wrapper.get(testId('game-menu'))
+    await button.trigger('click')
+    const toggle = wrapper.get(`${testId('view-switch')} [role="switch"]`)
+    // Within the menu it stays open...
+    await toggle.trigger('focusout', { relatedTarget: button.element })
+    expect(button.attributes('aria-expanded')).toBe('true')
+    // ...Tab on to the next thing on the page and it closes.
+    await toggle.trigger('focusout', { relatedTarget: wrapper.get(testId('prompt')).element })
+    expect(button.attributes('aria-expanded')).toBe('false')
   })
 
   it('starts with the simple table when the player chose it before', async () => {

@@ -25,13 +25,38 @@ export interface TableTarget {
   y: number
 }
 
-/** The 3D table is on screen and laid out. */
+/**
+ * The 3D table is on screen and laid out for the canvas as it is now (not as it was before a
+ * resize: the hidden list says which size it was laid out for).
+ */
 export async function expectTable(page: Page): Promise<void> {
   await expect(page.getByTestId('table-canvas')).toBeVisible()
-  await expect(page.getByTestId('table-targets')).toHaveAttribute(
-    'data-layout',
-    /portrait|landscape/,
-  )
+  await expect(async () => {
+    const { size, laidOutFor } = await page.evaluate(() => {
+      const canvas = document.querySelector<HTMLElement>('[data-testid="table-canvas"]')
+      const list = document.querySelector<HTMLElement>('[data-testid="table-targets"]')
+      return {
+        size: canvas ? `${canvas.clientWidth}x${canvas.clientHeight}` : null,
+        laidOutFor: list?.dataset.size ?? null,
+      }
+    })
+    expect(laidOutFor).toBe(size)
+  }).toPass({ timeout: 10_000 })
+}
+
+/**
+ * The cards laid in the play as this player's 3D table shows them: their own and their
+ * opponent's, in the order laid; `*` marks one turned face down (from an earlier count).
+ */
+export function laidCards(page: Page): Promise<{ mine: string[]; theirs: string[] }> {
+  return page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="table-card"]'))
+    const laid = (zone: string) =>
+      cards
+        .filter((el) => el.dataset.zone === zone)
+        .map((el) => `${el.dataset.card ?? '?'}${el.dataset.faceUp === 'true' ? '' : '*'}`)
+    return { mine: laid('my-played'), theirs: laid('opponent-played') }
+  })
 }
 
 /** Every card that takes input, read in one look at the page. */

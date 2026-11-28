@@ -9,6 +9,7 @@ import { computeLayout } from './layout'
 import { LAYOUT_FIXTURES, fixtureView } from './layoutFixtures'
 import {
   HOVER_LIFT,
+  PULSE,
   SHAKE,
   TARGET_TINT,
   TableInput,
@@ -72,32 +73,36 @@ function tap(input: TableInput, p: TablePointer) {
   input.pointerUp(p)
 }
 
+/** Where a point on a card (in its own space, unscaled) is on the table. */
+function worldOnCard(t: ReturnType<typeof table>, key: string, x: number, z: number) {
+  t.scene.scene.updateMatrixWorld()
+  return t.layer.get(key)!.localToWorld(new Vector3(x, 0, z))
+}
+
 /** Where a point on a card (in its own space, unscaled) is on screen. */
 function pointOnCard(t: ReturnType<typeof table>, key: string, x: number, z: number) {
-  const mesh = t.layer.get(key)!
-  t.scene.scene.updateMatrixWorld()
-  const world = mesh.localToWorld(new Vector3(x, 0, z))
-  return toScreen(t.scene.camera, t.scene.viewport!, world)
+  return toScreen(t.scene.camera, t.scene.viewport!, worldOnCard(t, key, x, z))
 }
+
+// Phones upright and on their side, tablets, laptops and desktops; with and without the
+// HUD over the top and bottom of the canvas.
+const VIEWPORTS = [
+  [320, 568],
+  [360, 640],
+  [375, 667],
+  [390, 844],
+  [412, 915],
+  [568, 320],
+  [844, 390],
+  [768, 1024],
+  [1024, 768],
+  [1280, 720],
+  [1440, 900],
+  [1920, 1080],
+] as const
 
 describe('TableInput', () => {
   describe('hit areas', () => {
-    // Phones upright and on their side, tablets, laptops and desktops; with and without the
-    // HUD over the top and bottom of the canvas.
-    const VIEWPORTS = [
-      [320, 568],
-      [360, 640],
-      [375, 667],
-      [390, 844],
-      [412, 915],
-      [568, 320],
-      [844, 390],
-      [768, 1024],
-      [1024, 768],
-      [1280, 720],
-      [1440, 900],
-      [1920, 1080],
-    ] as const
     const INSETS: Partial<Insets>[] = [{}, { top: 90, bottom: 190 }]
 
     it.each(VIEWPORTS)('the middle of every card in hand picks that card at %i×%i', (w, h) => {
@@ -124,15 +129,47 @@ describe('TableInput', () => {
       }
     })
 
-    it('gives an overlapped card in the fan only the part of it on top', () => {
-      // A narrow phone: the six cards overlap.
+    it('gives an overlapped card in the fan only the part of it on top, at every size', () => {
+      /** Each covered edge: the card the tap should go to, and the one it went to. */
+      const covered: { where: string; expected: string; picked: string | null }[] = []
+      for (const [w, h] of VIEWPORTS) {
+        for (const fixture of ['deal', 'discard']) {
+          const t = table(fixture, 0, { width: w, height: h, insets: { top: 90, bottom: 190 } })
+          t.hand.slice(0, -1).forEach((left, i) => {
+            const right = t.hand[i + 1]!
+            const where = `${left} beside ${right} at ${w}×${h} (${fixture})`
+            // Its left part is always its own.
+            const open = pointOnCard(t, left, -0.35, 0)
+            expect(t.input.pick(open.x, open.y), where).toBe(left)
+            // Its right edge, where the next card (on top of it) covers it, is the next card's.
+            const edge = worldOnCard(t, left, 0.46, 0)
+            const onRight = t.layer.get(right)!.worldToLocal(edge.clone())
+            if (Math.abs(onRight.x) < 0.45 && Math.abs(onRight.z) < 0.6) {
+              const at = pointOnCard(t, left, 0.46, 0)
+              covered.push({ where, expected: right, picked: t.input.pick(at.x, at.y) })
+            }
+          })
+          t.scene.dispose()
+        }
+      }
+      for (const { where, expected, picked } of covered) expect(picked, where).toBe(expected)
+      // Narrow screens do overlap the cards, so this really was tested.
+      expect(covered.length).toBeGreaterThan(10)
+    })
+
+    it('a lifted card does not take taps from the cards beside it', () => {
       const t = table('deal', 0, { width: 320, height: 568 })
-      const [first, second] = t.hand as [string, string]
-      // The right edge of the first card is under the second card.
-      const covered = pointOnCard(t, first, 0.45, 0)
-      expect(t.input.pick(covered.x, covered.y)).toBe(second)
-      const open = pointOnCard(t, first, -0.3, 0)
-      expect(t.input.pick(open.x, open.y)).toBe(first)
+      t.input.setTargets(new Map(t.hand.map((k) => [k, 'usable' as const])))
+      const [left, middle, right] = t.hand.slice(1, 4) as [string, string, string]
+      const p = t.input.screenPoint(middle)!
+      t.input.pointerMove(mouse(p.x, p.y))
+      t.scene.animator.advance(500)
+      expect(t.input.hoveredKey).toBe(middle)
+      const ofLeft = pointOnCard(t, left, -0.35, 0)
+      expect(t.input.pick(ofLeft.x, ofLeft.y)).toBe(left)
+      // Where the next card lies on top of the lifted one, as it did before the lift.
+      const covered = pointOnCard(t, middle, 0.46, 0)
+      expect(t.input.pick(covered.x, covered.y)).toBe(right)
     })
 
     it('picks nothing on the bare felt', () => {
@@ -228,14 +265,35 @@ describe('TableInput', () => {
       expect(t.scene.animator.busy).toBe(false)
     })
 
-    it('does not shake with reduced motion', () => {
+    it('darkens a blocked card for a moment instead of shaking it, with reduced motion', () => {
+      const t = table('play', 1, undefined, { reducedMotion: true })
+      const key = t.hand[0]!
+      t.input.setTargets(new Map([[key, 'blocked']]))
+      const mesh = t.layer.get(key)!
+      const p = t.input.screenPoint(key)!
+      tap(t.input, finger(p.x, p.y))
+      let darkest = 1
+      for (let ms = 0; ms < PULSE.duration; ms += 16) {
+        t.scene.animator.advance(16)
+        darkest = Math.min(darkest, mesh.tint)
+        expect(mesh.body.position.x).toBe(0)
+      }
+      t.scene.animator.advance(100)
+      expect(darkest).toBeLessThan(TARGET_TINT.blocked * (1 - PULSE.depth / 2))
+      expect(mesh.tint).toBe(TARGET_TINT.blocked)
+      expect(t.scene.animator.busy).toBe(false)
+    })
+
+    it('ends the pulse at the shade the card has by then', () => {
       const t = table('play', 1, undefined, { reducedMotion: true })
       const key = t.hand[0]!
       t.input.setTargets(new Map([[key, 'blocked']]))
       const p = t.input.screenPoint(key)!
       tap(t.input, finger(p.x, p.y))
-      expect(t.scene.animator.busy).toBe(false)
-      expect(t.layer.get(key)!.body.position.x).toBe(0)
+      t.scene.animator.advance(50)
+      t.input.setTargets(new Map([[key, 'usable']]))
+      t.scene.animator.advance(500)
+      expect(t.layer.get(key)!.tint).toBe(TARGET_TINT.usable)
     })
 
     it('a card going back to the pool mid-shake is not moved again', () => {

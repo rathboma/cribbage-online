@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, useTemplateRef, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  defineComponent,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  useTemplateRef,
+  watch,
+} from 'vue'
 import { RouterLink } from 'vue-router'
 import type { CardId } from '@shared/protocol'
 import { friendlyError } from '@/api/messages'
@@ -30,20 +41,76 @@ const table = useTableView()
 const use3d = computed(() => table.view.value === '3d')
 const hole = useTemplateRef<HTMLElement>('hole')
 
-/** The 3D table, with three.js, downloaded only by players who will see it. */
+/** Over the felt, in the middle of the screen (the HUD floats over it). */
+const LOADING_STYLE = {
+  position: 'absolute',
+  inset: '0',
+  display: 'grid',
+  placeItems: 'center',
+  color: 'var(--color-cream)',
+  fontSize: 'var(--font-size-sm)',
+} as const
+
+/** How long the 3D table's code may take to arrive before the simple table takes its place. */
+const THREE_LOAD_TIMEOUT_MS = 20_000
+
+/**
+ * The 3D table, with three.js, downloaded only by players who will see it. A failed download is
+ * tried once more; if it still fails, or takes too long, the simple table takes its place.
+ */
 const ThreeTable = defineAsyncComponent({
   loader: () => import('@/components/table/ThreeTable.vue').then((module) => module.default),
-  onError: (error, _retry, fail) => {
-    threeFailed(error)
-    fail()
-  },
+  onError: (_error, retry, fail, attempts) => (attempts <= 1 ? retry() : fail()),
+  timeout: THREE_LOAD_TIMEOUT_MS,
+  delay: 300,
+  // Shown, over the felt, while it downloads (after `delay`): the HUD already says what to do.
+  loadingComponent: defineComponent({
+    name: 'TableLoading',
+    setup: () => () =>
+      h('div', { style: LOADING_STYLE, 'data-testid': 'table-loading' }, [
+        h('p', { role: 'status' }, 'Setting the table…'),
+      ]),
+  }),
+  // It never arrived (or not in time): say so and show the simple table.
+  errorComponent: defineComponent({
+    name: 'TableUnavailable',
+    props: { error: { type: null, default: null } },
+    setup(props) {
+      onMounted(() => threeUnavailable('load', props.error))
+      return () => null
+    },
+  }),
 })
 
-function threeFailed(error: unknown) {
+const UNAVAILABLE = {
+  webgl: "The 3D table can't run in this browser, so here is the simple one.",
+  load: "The 3D table didn't load, so here is the simple one. Reload the page to try again.",
+} as const
+
+/** The 3D table can't be shown in this visit: its code didn't load, or WebGL failed. */
+function threeUnavailable(why: keyof typeof UNAVAILABLE, error: unknown) {
   if (!use3d.value) return
   console.warn('The 3D table could not start; showing the simple one.', error)
   table.markBroken()
-  toasts.push("The 3D table can't run in this browser, so here is the simple one.")
+  toasts.push(UNAVAILABLE[why])
+}
+
+const main = useTemplateRef<HTMLElement>('main')
+
+/**
+ * The way to the simple table for keyboard and screen-reader players. The button goes with the
+ * 3D table, so focus goes on to the hand they can now play (or the screen's heading).
+ */
+async function useSimpleTable() {
+  table.set('2d')
+  await nextTick()
+  const card = main.value?.querySelector<HTMLElement>('[data-testid="hand-card"]')
+  const heading = main.value?.querySelector<HTMLElement>('h1')
+  if (card) card.focus()
+  else if (heading) {
+    heading.setAttribute('tabindex', '-1')
+    heading.focus()
+  }
 }
 
 const view = computed(() => game.presentedView)
@@ -110,7 +177,7 @@ const tableVisible = computed(
 </script>
 
 <template>
-  <div v-if="view && status" class="game-screen" :class="{ 'game-screen--3d': use3d }">
+  <div v-if="view && status" class="game-screen">
     <ThreeTable
       v-if="use3d"
       v-model:selected="selected"
@@ -119,9 +186,9 @@ const tableVisible = computed(
       :hole="hole"
       @play="play"
       @cut="act(game.cut)"
-      @failed="threeFailed"
+      @failed="threeUnavailable('webgl', $event)"
     />
-    <main class="game-screen__main">
+    <main ref="main" class="game-screen__main">
       <header class="game-screen__bar on-dark">
         <RouterLink to="/" class="game-screen__home">
           <span aria-hidden="true">←</span> Home
@@ -149,7 +216,7 @@ const tableVisible = computed(
               type="button"
               class="game-screen__simple visually-hidden-until-focus"
               data-testid="use-simple-table"
-              @click="table.set('2d')"
+              @click="useSimpleTable"
             >
               Playing with a keyboard or screen reader? Switch to the simple table
             </button>
@@ -171,11 +238,20 @@ const tableVisible = computed(
 
 <style scoped>
 /* The 3D table is drawn behind everything, across the whole screen (and the whole page, when
-   a short screen scrolls). */
+   a short screen scrolls). A finger on the table is playing, so the page neither scrolls nor
+   zooms under it... */
 .game-screen {
+  --table-touch-action: none;
   position: relative;
   min-height: 100vh;
   min-height: 100dvh;
+}
+/* ...unless the screen is too short for the game (see min-height below) and the page has to
+   scroll to reach the buttons: then an upward or downward drag on the table scrolls it. */
+@media (max-height: 30rem) {
+  .game-screen {
+    --table-touch-action: pan-y;
+  }
 }
 /* Exactly one screen tall, so the scores, the hand and the buttons are always in view. (On a
    very short screen, such as a phone on its side, the page scrolls instead.) */
@@ -229,7 +305,7 @@ const tableVisible = computed(
   position: relative;
   flex: 1;
   min-height: 0;
-  touch-action: none;
+  touch-action: var(--table-touch-action, none);
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;

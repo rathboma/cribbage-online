@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import type { CardId, PlayerView } from '@shared/protocol'
 import GameTable from '@/components/table/GameTable.vue'
-import { handCardState, tapCard } from '@/game/handInput'
+import { deckState, handCardState, tapCard } from '@/game/handInput'
 import { cardLayer, type CardLayer } from '@/three/applyLayout'
 import type { Viewport } from '@/three/camera'
 import { computeLayout, type Layout, type LayoutMode } from '@/three/layout'
@@ -13,8 +13,9 @@ import type { TableScene, TableSceneOptions } from '@/three/TableScene'
  * The 3D table in a live game. It fills its box (the whole game screen, behind the HUD) and
  * keeps the cards in `hole`, the part of the screen the HUD leaves free: they are laid out
  * there, and taps there go to the table. The layout follows the view it is given (the store's
- * `presentedView`) and snaps to it whenever it changes; animating the changes is the animation
- * director's job (P4.5).
+ * `presentedView`) and the cards picked for the crib, and snaps to it whenever either changes;
+ * animating the changes is the animation director's job (P4.5). `busy` only changes which cards
+ * respond, so it never moves a card.
  *
  * Like the simple table it only reports what the player picks: a card to lay, the cards picked
  * for the crib, or a cut. Which cards respond comes from the view's legal moves (handInput.ts,
@@ -49,8 +50,9 @@ let layout: Layout | null = null
 let mode: LayoutMode | undefined
 
 /**
- * Where each card that takes input is on screen and how it responds, for the end-to-end tests
- * (which tap there) and nothing else: a hidden copy of what the canvas shows.
+ * For the end-to-end tests and nothing else, a hidden copy of what the canvas shows: where
+ * each card that takes input is drawn and how it responds (the tests tap there), every card on
+ * the table and where it lies, and the size of canvas the layout is for.
  */
 interface Target {
   key: string
@@ -59,8 +61,15 @@ interface Target {
   x: number
   y: number
 }
+interface TableCard {
+  key: string
+  card: CardId | null
+  zone: string
+  faceUp: boolean
+}
 const targets = ref<Target[]>([])
-const laidOut = ref<LayoutMode | null>(null)
+const tableCards = ref<TableCard[]>([])
+const laidOut = ref<{ mode: LayoutMode; size: string } | null>(null)
 
 const sceneOptions: Omit<TableSceneOptions, 'createRenderer' | 'frames'> = {
   // Laid out again for the new size before the resized frame is drawn.
@@ -93,8 +102,23 @@ function layOut(size: Viewport | null = scene.value?.viewport ?? null) {
   })
   mode = layout.mode
   layer.apply(layout)
+  laidOut.value = {
+    mode: layout.mode,
+    size: `${Math.round(size.width)}x${Math.round(size.height)}`,
+  }
+  tableCards.value = layout.cards.map((c) => ({
+    key: c.key,
+    card: c.face,
+    zone: c.zone,
+    faceUp: c.faceUp,
+  }))
+  updateTargets()
+}
+
+/** Tells the input which cards respond now, and publishes where they are. Moves nothing. */
+function updateTargets() {
+  if (!layout || !input) return
   input.setTargets(targetStates(layout))
-  laidOut.value = layout.mode
   publishTargets()
 }
 
@@ -104,8 +128,9 @@ function targetStates(next: Layout): Map<string, TargetState> {
   for (const card of next.cards) {
     if (card.zone === 'my-hand' && card.face) {
       states.set(card.key, handCardState(props.view, props.selected, props.busy, card.face))
-    } else if (card.zone === 'deck' && props.view.legal.cut) {
-      states.set(card.key, props.busy ? 'idle' : 'usable')
+    } else if (card.zone === 'deck') {
+      const deck = deckState(props.view, props.busy)
+      if (deck) states.set(card.key, deck)
     }
   }
   return states
@@ -128,7 +153,7 @@ function onTap(key: string) {
   const card = layout?.cards.find((c) => c.key === key)
   if (!card) return
   if (card.zone === 'deck') {
-    if (props.view.legal.cut && !props.busy) emit('cut')
+    if (deckState(props.view, props.busy) === 'usable') emit('cut')
     return
   }
   if (card.zone !== 'my-hand' || !card.face) return
@@ -161,9 +186,15 @@ function onDisposed() {
   scene.value = null
 }
 
+// A new view, or a card picked or put back, moves cards. Busy coming and going only changes
+// which of them respond: snapping the table then would stop whatever is moving (P4.5).
 watch(
-  () => [props.view, props.selected, props.busy] as const,
+  () => [props.view, props.selected] as const,
   () => layOut(),
+)
+watch(
+  () => props.busy,
+  () => updateTargets(),
 )
 
 // The HUD changing size (a longer prompt, the show's panels appearing) moves the hole.
@@ -230,12 +261,18 @@ function onLeave() {
   over = false
   input?.pointerLeave()
 }
+// The page scrolling moves the cards out from under a mouse that hasn't moved: the card it
+// lifted no longer is under it. It is picked again on the next move.
+function onScroll() {
+  if (over) onLeave()
+}
 onMounted(() => {
   window.addEventListener('pointerdown', onPointerDown)
   window.addEventListener('pointermove', onPointerMove, { passive: true })
   window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('pointercancel', onPointerCancel)
   window.addEventListener('blur', onLeave)
+  window.addEventListener('scroll', onScroll, { passive: true })
   document.documentElement.addEventListener('pointerleave', onLeave)
 })
 onBeforeUnmount(() => {
@@ -244,6 +281,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerCancel)
   window.removeEventListener('blur', onLeave)
+  window.removeEventListener('scroll', onScroll)
   document.documentElement.removeEventListener('pointerleave', onLeave)
   holeObserver?.disconnect()
   holeObserver = null
@@ -259,7 +297,7 @@ onBeforeUnmount(() => {
       @failed="emit('failed', $event)"
       @disposed="onDisposed"
     />
-    <ul hidden data-testid="table-targets" :data-layout="laidOut ?? undefined">
+    <ul hidden data-testid="table-targets" :data-layout="laidOut?.mode" :data-size="laidOut?.size">
       <li
         v-for="t in targets"
         :key="t.key"
@@ -269,6 +307,17 @@ onBeforeUnmount(() => {
         :data-state="t.state"
         :data-x="t.x.toFixed(1)"
         :data-y="t.y.toFixed(1)"
+      />
+    </ul>
+    <ul hidden data-testid="table-cards">
+      <li
+        v-for="c in tableCards"
+        :key="c.key"
+        data-testid="table-card"
+        :data-key="c.key"
+        :data-card="c.card ?? undefined"
+        :data-zone="c.zone"
+        :data-face-up="c.faceUp"
       />
     </ul>
   </div>

@@ -3,10 +3,12 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import type { CardId, PlayerView } from '@shared/protocol'
 import { playerView, viewWhen, workedExample } from '@/test/game'
-import type { TableRenderer } from '@/three/TableScene'
+import type { TableRenderer, TableScene } from '@/three/TableScene'
 import ThreeTable from './ThreeTable.vue'
 
-// The real scene, cards and picking, on a stand-in renderer: jsdom has no WebGL.
+// The real scene, cards and picking, on a stand-in renderer: jsdom has no WebGL. Every scene
+// made is kept, so a test can look inside it.
+const created = vi.hoisted(() => ({ scenes: [] as TableScene[] }))
 vi.mock('@/three/TableScene', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/three/TableScene')>()
   const { fakePage, fakeRenderer, manualFrames } = await import('@/test/renderer')
@@ -21,6 +23,7 @@ vi.mock('@/three/TableScene', async (importOriginal) => {
         page: fakePage().visibility,
         atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
       })
+      created.scenes.push(this)
     }
   }
   return { ...real, TableScene: TestScene }
@@ -255,5 +258,42 @@ describe('ThreeTable', () => {
     document.body.append(canvas)
     tapAt(canvas, t.x, t.y)
     expect(wrapper.emitted('play')).toBeUndefined()
+  })
+
+  it('does not move a card when only busy changes, so nothing moving is stopped', async () => {
+    const view = playerView(workedExample(), 0)
+    const { wrapper } = await open(view)
+    const scene = created.scenes.at(-1)!
+    const card = scene.table.getObjectByName(`card-${view.hand}:7S`)!
+    const rest = card.position.x
+    // A card on its way somewhere, as the animation director will move them.
+    scene.animator.tween(card.position, { x: rest + 1 }, { duration: 1000 })
+    scene.animator.advance(500)
+    const midway = card.position.x
+    await wrapper.setProps({ busy: true })
+    expect(target(wrapper, '7S').state).toBe('idle')
+    expect(card.position.x).toBe(midway)
+    scene.animator.advance(500)
+    expect(card.position.x).toBeCloseTo(rest + 1)
+    // A new view is laid out again.
+    await wrapper.setProps({ view: { ...view } })
+    expect(card.position.x).toBeCloseTo(rest)
+  })
+
+  it('lists every card on the table, and the canvas size the layout is for', async () => {
+    const view = playerView(workedExample(), 0)
+    const { wrapper } = await open(view)
+    const list = wrapper.get('[data-testid="table-targets"]')
+    expect(list.attributes('data-size')).toBe(`${SIZE.width}x${SIZE.height}`)
+    const cards = wrapper.findAll('[data-testid="table-card"]').map((li) => {
+      const el = li.element as HTMLElement
+      return { card: el.dataset.card ?? null, zone: el.dataset.zone, faceUp: el.dataset.faceUp }
+    })
+    expect(cards).toContainEqual({ card: '5H', zone: 'starter', faceUp: 'true' })
+    expect(cards.filter((c) => c.zone === 'my-hand').map((c) => c.card)).toEqual(view.myHand)
+    // The opponent's cards are on the table, with no faces.
+    const theirs = cards.filter((c) => c.zone === 'opponent-hand')
+    expect(theirs).toHaveLength(4)
+    expect(theirs.every((c) => c.card === null && c.faceUp === 'false')).toBe(true)
   })
 })

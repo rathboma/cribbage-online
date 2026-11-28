@@ -3,19 +3,23 @@
  * playing on the canvas. Cards are tapped where they are drawn (see table3d.ts), with a mouse
  * on a desktop or a finger on an emulated phone.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 import {
   expectNoErrors,
   expectSameTable,
   handNumber,
+  joinByLink,
   move,
+  newPlayer,
   phase,
   seatTwoPlayers,
+  startGame,
   type Player,
 } from './table'
 import {
   PHONE,
   expectTable,
+  laidCards,
   move3d,
   nextChoice3d,
   play3d,
@@ -130,6 +134,14 @@ test('tapping the middle of each card picks that card, at phone, tablet and desk
       await page.setViewportSize(viewport)
       await page.evaluate(() => window.scrollTo(0, 0))
       await expectTable(page)
+      // A screen too short for the game scrolls, and a drag on the table may scroll it then.
+      const touchAction = viewport.height <= 480 ? 'pan-y' : 'none'
+      for (const testId of ['table-canvas', 'table-hole']) {
+        const actual = await page
+          .getByTestId(testId)
+          .evaluate((el) => getComputedStyle(el).touchAction)
+        expect(actual, `${testId} at ${viewport.width}×${viewport.height}`).toBe(touchAction)
+      }
       const hand = await handOnTable(page)
       expect(hand).toHaveLength(6)
       for (const card of hand) {
@@ -187,6 +199,38 @@ test('the simple table: the menu switch, ?view=2d, kept through reloads and navi
   await page.getByTestId('game-menu').click()
   await expect(toggle).toHaveAttribute('aria-checked', 'false')
   await expectNoErrors(host)
+})
+
+test('while the 3D table downloads it says so, and if it never comes the simple table does', async ({
+  browser,
+}) => {
+  const host = await newPlayer(browser, 'Ada', DESKTOP_3D)
+  const guest = await newPlayer(browser, 'Sam')
+  // The 3D table's code (three.js and all) is held back, then fails.
+  const held: Route[] = []
+  let fail = false
+  await host.context.route(/\/assets\/ThreeTable-[^/]+\.js$/, (route) =>
+    fail ? route.abort() : void held.push(route),
+  )
+  const code = await startGame(host)
+  await joinByLink(guest, code)
+  await expect(host.page.getByTestId('game')).toHaveAttribute('data-phase', 'discard')
+  await expect(host.page.getByTestId('table-loading')).toBeVisible()
+  // The HUD works meanwhile.
+  await expect(host.page.getByTestId('action-discard')).toBeVisible()
+
+  fail = true
+  for (const route of held) await route.abort()
+  await expect(host.page.getByTestId('dom-table')).toBeVisible()
+  await expect(host.page.getByTestId('table-loading')).toHaveCount(0)
+  await expect(host.page.locator('[data-testid="toast"][data-kind="info"]')).toHaveCount(1)
+  // Nothing to choose for the rest of this visit; the game goes on, on the simple table.
+  await expect(host.page.getByTestId('game-menu')).toHaveCount(0)
+  expect(await move(host.page)).not.toBeNull()
+  // The failed download is all that went wrong.
+  expect(
+    host.errors.filter((e) => !/Failed to load|ThreeTable|dynamically imported/i.test(e)),
+  ).toEqual([])
 })
 
 test('without WebGL the simple table is shown, with no switch', async ({ browser }) => {
@@ -279,6 +323,15 @@ test(
           (await phase(host.page)) === 'game_over' && (await phase(guest.page)) === 'game_over',
         afterMove: async (_by, choice) => {
           kinds.add(choice.kind === 'press' ? choice.testId : choice.kind)
+          if (choice.kind === 'play') {
+            // Every card laid is on both tables, in the same place, face up. (The HUD can't
+            // show this, and the simple table, which expectSameTable reads, isn't there.)
+            await expect(async () => {
+              const [a, b] = [await laidCards(host.page), await laidCards(guest.page)]
+              expect(a.mine).toEqual(b.theirs)
+              expect(a.theirs).toEqual(b.mine)
+            }).toPass({ timeout: 20_000 })
+          }
           if (choice.kind !== 'press' || choice.testId !== 'action-ready') return
           const [a, b] = [await handNumber(host.page), await handNumber(guest.page)]
           if (a === b && a > hands) {

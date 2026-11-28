@@ -1,7 +1,7 @@
 /**
- * What a player can do with the cards in their hand right now, and what tapping one does. Both
- * tables use this, the simple one and the 3D one, so they offer exactly the same moves: only
- * what `view.legal` allows. Nothing here sends anything; the game screen does that.
+ * What a player can do with the cards in their hand (and the deck) right now, and what tapping
+ * one does. Both tables use this, the simple one and the 3D one, so they offer exactly the same
+ * moves: only what `view.legal` allows. Nothing here sends anything; the game screen does that.
  */
 import { DISCARD_COUNT } from '@shared/engine'
 import type { CardId, PlayerView } from '@shared/protocol'
@@ -39,6 +39,15 @@ export function handCardState(
 /** Whether tapping a card in this state does anything. */
 export function canUseCard(state: HandCardState, busy: boolean): boolean {
   return !busy && (state === 'usable' || state === 'selected')
+}
+
+/**
+ * The deck, which the pone taps to cut (as the HUD's Cut button does): null when it isn't
+ * theirs to cut, idle while a move is on its way.
+ */
+export function deckState(view: PlayerView, busy: boolean): 'usable' | 'idle' | null {
+  if (!view.legal.cut) return null
+  return busy ? 'idle' : 'usable'
 }
 
 /** What tapping a card asks for: lay it, or a new set of cards picked for the crib. */

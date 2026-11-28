@@ -278,6 +278,9 @@ export class TableScene {
     renderer.setPixelRatio(Math.min(Math.max(devicePixelRatio, 1), MAX_PIXEL_RATIO))
     renderer.setSize(width, height, false)
     this.size = { width, height }
+    // Framed for the new size before the layout is told, so whatever it works out from the
+    // camera (where a card is on screen) is already right, and again after, for its new frame.
+    frameCamera(this.camera, this.frameRect, this.framing!)
     this.onResize?.({ width, height })
     frameCamera(this.camera, this.frameRect, this.framing!)
     this.draw()

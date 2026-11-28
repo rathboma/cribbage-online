@@ -199,6 +199,24 @@ describe('TableScene', () => {
     expect(renderer.render).toHaveBeenCalledTimes(drawn + 1)
   })
 
+  it('has the camera fitted to the new size by the time it reports a resize', () => {
+    const aspects: number[] = []
+    const scene: TableScene = new TableScene({
+      createRenderer: () => fakeRenderer() as unknown as TableRenderer,
+      frames: manualFrames(),
+      page: fakePage().visibility,
+      atlasImage: (max) => new AtlasImage(atlasLayout(max), fakeAtlasSources().sources),
+      // Whatever the layout works out from the camera here (where a card is on screen) must
+      // already be for the new size, even if its frame stays the same.
+      onResize: () => aspects.push(scene.camera.aspect),
+    })
+    scene.mount(document.createElement('canvas'))
+    scene.resize(400, 800, 1)
+    scene.resize(900, 450, 1)
+    expect(aspects[0]).toBeCloseTo(400 / 800)
+    expect(aspects[1]).toBeCloseTo(900 / 450)
+  })
+
   it('reports a resize before framing and drawing it, so the layout can change first', () => {
     const renderer = fakeRenderer()
     const order: string[] = []

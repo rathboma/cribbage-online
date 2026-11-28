@@ -29,6 +29,11 @@ function close({ focus = false } = {}) {
 function onPointerDown(event: PointerEvent) {
   if (!root.value?.contains(event.target as Node)) close()
 }
+// So does focus moving on past it (Tab from the last control in the panel).
+function onFocusOut(event: FocusEvent) {
+  const next = event.relatedTarget as Node | null
+  if (next && !root.value?.contains(next)) close()
+}
 watch(open, (now) => {
   if (now) document.addEventListener('pointerdown', onPointerDown, true)
   else document.removeEventListener('pointerdown', onPointerDown, true)
@@ -37,7 +42,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onPointerDown,
 </script>
 
 <template>
-  <div ref="root" class="game-menu" @keydown.esc="close({ focus: true })">
+  <div ref="root" class="game-menu" @keydown.esc="close({ focus: true })" @focusout="onFocusOut">
     <button
       ref="button"
       type="button"

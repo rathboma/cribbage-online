@@ -39,6 +39,8 @@ export const HOVER_LIFT = 0.1 * CARD_HEIGHT
 export const HOVER_MS = 110
 /** The "no" shake: side to side, dying away. */
 export const SHAKE = { distance: 0.06 * CARD_WIDTH, duration: 340, swings: 3 }
+/** With reduced motion, a blocked card darkens this much for a moment instead of shaking. */
+export const PULSE = { depth: 0.45, duration: 260 }
 /** A press that moves further than this (CSS pixels) is a drag, not a tap. */
 export const TAP_SLOP = 10
 
@@ -82,7 +84,10 @@ export class TableInput {
   /** Where the mouse is over the table, so hovering follows a layout that moves under it. */
   private mouse: { x: number; y: number } | null = null
   private cursor: TableCursor = 'default'
-  /** The shake each card is doing, so a newer one (or the card's next use) stops the old one. */
+  /**
+   * The shake (or pulse) each card is doing, so a newer one (or the card's next use) stops the
+   * old one.
+   */
   private readonly shakes = new WeakMap<CardMesh, object>()
   private readonly raycaster = new Raycaster()
   private readonly ndc = new Vector2()
@@ -267,10 +272,17 @@ export class TableInput {
     this.scene.invalidate()
   }
 
-  /** A quick side-to-side "no", dying away. */
+  /**
+   * A quick side-to-side "no", dying away; with reduced motion, the card darkens for a moment
+   * instead.
+   */
   private shake(key: string) {
     const mesh = this.layer.get(key)
-    if (!mesh || this.reducedMotion()) return
+    if (!mesh) return
+    if (this.reducedMotion()) {
+      this.pulse(mesh)
+      return
+    }
     const body = mesh.body
     const generation = mesh.generation
     const progress = { t: 0 }
@@ -292,6 +304,38 @@ export class TableInput {
       },
     )
     this.scene.invalidate()
+  }
+
+  /** Darkens the card for a moment and brings it back to the shade it had. */
+  private pulse(mesh: CardMesh) {
+    const generation = mesh.generation
+    const base = mesh.tint
+    const progress = { t: 0 }
+    this.shakes.set(mesh, progress)
+    this.scene.animator.tween(
+      progress,
+      { t: 1 },
+      {
+        duration: PULSE.duration,
+        ease: ease.linear,
+        onUpdate: () => {
+          if (mesh.generation !== generation || this.shakes.get(mesh) !== progress) return
+          // Back to whatever shade the card should have now (it may have changed meanwhile).
+          const shade = this.targetTint(mesh)
+          mesh.setTint(
+            progress.t >= 1 ? shade : base * (1 - PULSE.depth * Math.sin(Math.PI * progress.t)),
+          )
+        },
+      },
+    )
+    this.scene.invalidate()
+  }
+
+  /** The shade a card should have for its state now. */
+  private targetTint(mesh: CardMesh): number {
+    const key = mesh.userData.key as string | undefined
+    const state = key === undefined ? undefined : this.targets.get(key)
+    return state ? TARGET_TINT[state] : 1
   }
 
   /** A pointer over a card that can be tapped; `key` is the card under the mouse. */
