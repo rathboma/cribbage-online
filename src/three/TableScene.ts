@@ -21,6 +21,8 @@ import {
 } from 'three'
 import { colors } from '@/design/tokens'
 import { Animator } from './anim'
+import { cardAtlasImage, type AtlasImage } from './cardAtlas'
+import { CardPool } from './CardPool'
 
 /**
  * The 3D table: renderer, camera, lights, the felt and its wooden rail. A plain class with no
@@ -42,6 +44,9 @@ export const TABLE = { width: 15, depth: 19, railWidth: 0.7, railHeight: 0.18 } 
 /** Sharper than this costs a lot of fill rate on phones for little visible gain. */
 export const MAX_PIXEL_RATIO = 2
 
+/** Sharper card art at glancing angles than this costs phones more than it shows. */
+export const MAX_ANISOTROPY = 8
+
 /** After a long pause (a background tab), animations jump at most this far in one frame. */
 const MAX_FRAME_MS = 100
 
@@ -62,6 +67,7 @@ export type TableRenderer = Pick<
   | 'info'
   | 'properties'
   | 'shadowMap'
+  | 'capabilities'
 >
 
 /** When to draw: requestAnimationFrame in the browser, by hand in tests. */
@@ -79,6 +85,8 @@ export interface TableSceneOptions {
   onContextChange?: (lost: boolean) => void
   /** Whether the page is hidden, and its `visibilitychange` events: `document` by default. */
   page?: PageVisibility
+  /** The card atlas for a GPU's texture size limit: the page's cached one by default. */
+  atlasImage?: (maxTextureSize: number) => AtlasImage
 }
 
 export type PageVisibility = Pick<Document, 'hidden' | 'addEventListener' | 'removeEventListener'>
@@ -109,6 +117,7 @@ export class TableScene {
   readonly table = new Group()
 
   private renderer: TableRenderer | null = null
+  private cardPool: CardPool | null = null
   private canvas: HTMLCanvasElement | null = null
   private frameHandle: number | null = null
   private lastFrameTime: number | null = null
@@ -122,6 +131,7 @@ export class TableScene {
   private readonly onFrame?: (frameCount: number) => void
   private readonly onContextChange?: (lost: boolean) => void
   private readonly page: PageVisibility | null
+  private readonly atlasImage: (maxTextureSize: number) => AtlasImage
 
   constructor(options: TableSceneOptions = {}) {
     this.createRenderer = options.createRenderer ?? defaultRenderer
@@ -129,6 +139,7 @@ export class TableScene {
     this.onFrame = options.onFrame
     this.onContextChange = options.onContextChange
     this.page = options.page ?? (typeof document === 'undefined' ? null : document)
+    this.atlasImage = options.atlasImage ?? cardAtlasImage
     this.animator.onWake = () => {
       if (this.paused) this.animator.completeAll()
       this.invalidate()
@@ -153,6 +164,30 @@ export class TableScene {
   /** True while the browser has taken the WebGL context away. */
   get contextLost(): boolean {
     return this.lost
+  }
+
+  /**
+   * The cards: meshes to put on the table, sharing one atlas texture and one material. Made on
+   * first use, which starts loading the card art; only once mounted, because the atlas is
+   * sized to the GPU's limits. Disposed with the scene.
+   */
+  get cards(): CardPool {
+    if (this.disposed) throw new Error('TableScene: already disposed')
+    const renderer = this.renderer
+    if (!renderer) throw new Error('TableScene: not mounted')
+    this.cardPool ??= new CardPool({
+      image: this.atlasImage(renderer.capabilities.maxTextureSize),
+      anisotropy: Math.min(renderer.capabilities.getMaxAnisotropy(), MAX_ANISOTROPY),
+      onChange: () => this.invalidate(),
+    })
+    return this.cardPool
+  }
+
+  /** Geometries and textures the renderer holds on the GPU now (null before mounting). */
+  get gpuMemory(): { geometries: number; textures: number } | null {
+    if (!this.renderer) return null
+    const { geometries, textures } = this.renderer.info.memory
+    return { geometries, textures }
   }
 
   /** Starts drawing into `canvas`. Throws if WebGL is not available. */
@@ -208,8 +243,12 @@ export class TableScene {
     canvas?.removeEventListener('webglcontextrestored', this.handleContextRestored)
     this.page?.removeEventListener('visibilitychange', this.handleVisibility)
 
+    // The cards first, on and off the table (those back in the pool are not in the scene for
+    // disposeTree to find). They leave the scene, so their atlas is released once, here.
+    this.cardPool?.dispose()
+    this.cardPool = null
     const renderer = this.renderer
-    // Collected first: disposing a material makes the renderer forget its uniforms.
+    // Collected before the rest: disposing a material makes the renderer forget its uniforms.
     const bound = renderer ? boundTextures(this.scene, renderer) : []
     disposeTree(this.scene)
     if (this.scene.background instanceof Texture) this.scene.background.dispose()

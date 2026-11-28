@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BoxGeometry, Mesh, MeshStandardMaterial, Texture, Vector3 } from 'three'
+import { fakeAtlasSources } from '@/test/atlas'
+import { AtlasImage, atlasLayout } from './cardAtlas'
 import {
+  MAX_ANISOTROPY,
   MAX_PIXEL_RATIO,
   PLAY_AREA,
   TableScene,
@@ -20,6 +23,7 @@ function fakeRenderer() {
     shadowMap: { enabled: false, type: 0 },
     info: { memory: { geometries: 0, textures: 0 } },
     properties: new Map<unknown, unknown>(),
+    capabilities: { maxTextureSize: 4096, getMaxAnisotropy: () => 16 },
     setPixelRatio: vi.fn(),
     setSize: vi.fn(),
     render: vi.fn(),
@@ -75,17 +79,20 @@ function setup() {
   const page = fakePage()
   const onFrame = vi.fn()
   const onContextChange = vi.fn()
+  const atlas = fakeAtlasSources({ hold: true })
+  const atlasImage = vi.fn((max: number) => new AtlasImage(atlasLayout(max), atlas.sources))
   const scene = new TableScene({
     createRenderer: () => renderer as unknown as TableRenderer,
     frames,
     onFrame,
     onContextChange,
     page: page.visibility,
+    atlasImage,
   })
   const canvas = document.createElement('canvas')
   scene.mount(canvas)
   frames.tick() // the first frame after mounting
-  return { scene, renderer, frames, canvas, page, onFrame, onContextChange }
+  return { scene, renderer, frames, canvas, page, onFrame, onContextChange, atlas, atlasImage }
 }
 
 describe('TableScene', () => {
@@ -295,6 +302,64 @@ describe('TableScene', () => {
     const { scene, renderer } = setup()
     renderer.info.memory.geometries = 2
     expect(scene.dispose().geometries).toBe(2)
+  })
+
+  it('makes its cards on first use, sized to the GPU, and keeps them', () => {
+    const { scene, atlasImage } = setup()
+    expect(atlasImage).not.toHaveBeenCalled() // nothing loads until the cards are wanted
+    const cards = scene.cards
+    expect(scene.cards).toBe(cards)
+    expect(atlasImage).toHaveBeenCalledExactlyOnceWith(4096)
+    expect(cards.atlas.texture.anisotropy).toBe(MAX_ANISOTROPY)
+  })
+
+  it('has no cards before it is mounted or after it is disposed', () => {
+    expect(() => new TableScene().cards).toThrow(/not mounted/)
+    const { scene } = setup()
+    scene.dispose()
+    expect(() => scene.cards).toThrow(/disposed/)
+  })
+
+  it('draws again when the card art has loaded', async () => {
+    const { scene, frames, atlas } = setup()
+    const cards = scene.cards
+    scene.table.add(cards.acquire({ face: 'AS', faceUp: true }))
+    expect(frames.pending).toBe(0)
+    atlas.releaseImages()
+    await cards.atlas.image.loaded
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(frames.pending).toBe(1)
+  })
+
+  it('releases the cards with everything else: the atlas texture, the material, every card', () => {
+    const { scene, renderer } = setup()
+    const { cards } = scene
+    // As three.js would after drawing them: the atlas bound to the card material's uniforms.
+    renderer.properties.set(cards.material, { uniforms: { map: { value: cards.atlas.texture } } })
+    const onTable = cards.acquire({ face: '2D', faceUp: true })
+    scene.table.add(onTable)
+    const inPool = cards.acquire()
+    cards.release(inPool)
+    const spies = [
+      cards.atlas.texture,
+      cards.material,
+      onTable.body.geometry,
+      inPool.body.geometry,
+    ].map((thing) => {
+      const spy = vi.fn()
+      thing.addEventListener('dispose', spy)
+      return spy
+    })
+    scene.dispose()
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports what the GPU holds while mounted', () => {
+    const { scene, renderer } = setup()
+    renderer.info.memory.textures = 4
+    expect(scene.gpuMemory).toEqual({ geometries: 0, textures: 4 })
+    scene.dispose()
+    expect(scene.gpuMemory).toBeNull()
   })
 
   it('refuses to mount twice', () => {

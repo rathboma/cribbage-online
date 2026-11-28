@@ -3,7 +3,7 @@
  * the `scene` project in playwright.config.ts). Real WebGL in a real browser: what unit tests
  * with a stand-in renderer can't show.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 
 const frames = async (page: Page) => Number(await page.getByTestId('frame-count').innerText())
 
@@ -20,10 +20,25 @@ function watchConsole(page: Page): string[] {
   return problems
 }
 
-async function openTable(page: Page) {
+/** Opens /dev/table and waits for the table and, unless told not to, the card art. */
+async function openTable(page: Page, { art = true } = {}) {
   await page.goto('/dev/table')
   await expect(page.getByTestId('webgl')).toHaveText('yes')
   await expect(page.getByTestId('table-ready')).toBeAttached()
+  // The art arriving redraws the table, so tests that count frames wait for it.
+  if (art)
+    await expect(page.getByTestId('atlas-state')).toContainText('loaded', { timeout: 20_000 })
+}
+
+/**
+ * Intercepts the card images (not the modules the dev server serves for them): `handle` decides
+ * what happens to each.
+ */
+async function routeCardImages(page: Page, handle: (route: Route, url: string) => unknown) {
+  await page.route(/\/assets\/cards\/[^/?]+\.(svg|png)/, (route) => {
+    if (route.request().resourceType() !== 'image') return route.continue()
+    return handle(route, route.request().url())
+  })
 }
 
 /** The canvas fills its box, and its drawing buffer has the same shape (nothing stretched). */
@@ -187,7 +202,76 @@ test.describe('3D table scene', () => {
     await page.getByTestId('toggle').click()
     await expect(page.getByTestId('dispose-summary')).toContainText('1 clean of 1')
     // three.js still holds handles from before the loss and deletes them too, which WebGL
-    // reports as harmless warnings. Anything else is a problem.
-    expect(problems.filter((p) => !/object does not belong to this context/.test(p))).toEqual([])
+    // reports as harmless warnings: one per buffer, so with a table of cards Chrome stops
+    // after a few dozen and says so. Anything else is a problem.
+    const harmless = /object does not belong to this context|too many errors, no more errors/
+    expect(problems.filter((p) => !harmless.test(p))).toEqual([])
+  })
+
+  test('a card face that fails to load keeps its stand-in, and nothing breaks', async ({
+    page,
+  }) => {
+    const problems = watchConsole(page)
+    await routeCardImages(page, (route, url) =>
+      /\/KC\.png/.test(url) ? route.abort() : route.continue(),
+    )
+    await openTable(page)
+    await expect(page.getByTestId('atlas-missing')).toHaveText('KC')
+    await expect(page.getByTestId('card-stats')).toContainText('53 cards')
+    const before = await frames(page)
+    await page.getByTestId('animate').click()
+    await expect.poll(() => frames(page)).toBeGreaterThan(before)
+    await expect(page.getByTestId('animate')).toBeEnabled()
+    // The browser reports the failed request; the app itself stays quiet.
+    expect(problems.filter((p) => !/Failed to load resource/.test(p))).toEqual([])
+  })
+
+  test('the table can be used while the card art is still loading', async ({ page }) => {
+    const held: Route[] = []
+    await routeCardImages(page, (route) => void held.push(route))
+    await openTable(page, { art: false })
+    await expect(page.getByTestId('atlas-state')).toHaveText('loading')
+    await expect(page.getByTestId('card-stats')).toContainText('53 cards')
+    const before = await frames(page)
+    await page.getByTestId('animate').click()
+    await expect.poll(() => frames(page)).toBeGreaterThan(before + 2)
+    await expect(page.getByTestId('animate')).toBeEnabled()
+
+    // Once the art arrives the atlas is uploaded again and the table redrawn.
+    await expect.poll(() => held.length).toBe(53)
+    const loading = await frames(page)
+    for (const route of held) await route.continue()
+    await expect(page.getByTestId('atlas-state')).toHaveText('loaded', { timeout: 20_000 })
+    await expect.poll(() => frames(page)).toBeGreaterThan(loading)
+  })
+})
+
+test.describe('3D cards on a phone', () => {
+  test.use({ viewport: { width: 390, height: 760 }, deviceScaleFactor: 2 })
+
+  test('shows all 52 faces and the back from one texture and one material', async ({
+    page,
+  }, testInfo) => {
+    const problems = watchConsole(page)
+    await openTable(page)
+    await expect(page.getByTestId('atlas-state')).toHaveText('loaded')
+    await expect(page.getByTestId('card-stats')).toHaveText('53 cards, 1 material(s), 1 texture(s)')
+    // On the GPU: the lamp's shadow map (a colour and a depth texture), the lookup table three.js
+    // gives lit materials, and the card atlas. 53 cards add one texture between them.
+    await expect(page.getByTestId('gpu-textures')).toHaveText('4')
+    await page.waitForTimeout(300)
+    await testInfo.attach('cards at 390 px', {
+      body: await page.getByTestId('table-canvas').screenshot(),
+      contentType: 'image/png',
+    })
+    expect(problems).toEqual([])
+  })
+
+  test('unmounting releases the atlas texture with everything else', async ({ page }) => {
+    await openTable(page)
+    await page.getByTestId('toggle').click()
+    await expect(page.getByTestId('dispose-summary')).toContainText(
+      '1 clean of 1 (last: 0 geometries, 0 textures, context released)',
+    )
   })
 })
