@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, shallowRef } from 'vue'
+import { computed, nextTick, ref, shallowRef, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import type { Material, Texture } from 'three'
 import { cardId, fullDeck, type CardId } from '@shared/engine/cards'
+import type { Seat } from '@shared/engine/types'
 import GameTable from '@/components/table/GameTable.vue'
 import { Timeline } from '@/three/anim'
+import { cardLayer } from '@/three/applyLayout'
+import type { Viewport } from '@/three/camera'
+import { computeLayout, type LayoutMode } from '@/three/layout'
+import { LAYOUT_FIXTURES, fixtureView } from '@/three/layoutFixtures'
 import { CARD_HEIGHT, CARD_THICKNESS, CARD_WIDTH, CardMesh } from '@/three/CardMesh'
 import { webglAvailable } from '@/three/support'
 import {
@@ -15,10 +21,27 @@ import {
 
 /**
  * /dev/table, development builds only: the 3D table on its own, with no game and no server.
- * It lays out all 52 faces and the back for review. The end-to-end scene tests drive it (frame
- * counting, resizing, remounting, losing the WebGL context, the card atlas), and later Phase 4
- * work adds fixture views of every phase of a hand here.
+ * By default it lays out all 52 faces and the back for review; the switcher (or `?fixture=`
+ * and `?seat=` in the URL) shows instead one hand at each point of the game, laid out by the
+ * layout engine from fixture views. The end-to-end scene tests drive it (frame counting,
+ * resizing, remounting, losing the WebGL context, the card atlas, the layouts).
  */
+
+const route = useRoute()
+const router = useRouter()
+const GALLERY_ID = 'gallery'
+const fixtureId = ref(String(route.query.fixture ?? GALLERY_ID))
+const seat = ref<Seat>(route.query.seat === '1' ? 1 : 0)
+const fixture = computed(() => LAYOUT_FIXTURES.find((f) => f.id === fixtureId.value) ?? null)
+const layoutMode = ref<LayoutMode | null>(null)
+/** `?controls=0`: the table alone, filling the window (for screenshots at phone sizes). */
+const bare = route.query.controls === '0'
+watch([fixtureId, seat], ([id, s]) => {
+  const query: Record<string, string> = id === GALLERY_ID ? {} : { fixture: id, seat: String(s) }
+  if (bare) query.controls = '0'
+  void router.replace({ query })
+  if (scene.value) present(scene.value)
+})
 
 const frames = ref(0)
 const cameraAspect = ref<number | null>(null)
@@ -42,12 +65,44 @@ const options: Omit<TableSceneOptions, 'createRenderer' | 'frames'> = {
     gpuTextures.value = scene.value?.gpuMemory?.textures ?? null
   },
   onContextChange: (lost) => (contextLost.value = lost),
+  // Laid out again for the new shape before the resized frame is drawn.
+  onResize: (viewport) => {
+    if (scene.value && fixture.value) layOutFixture(scene.value, viewport)
+  },
 }
 
 /** The deck in order (clubs A–K, diamonds, hearts, spades) and then the back. */
 const GALLERY: (CardId | 'back')[] = [...fullDeck().map(cardId), 'back']
 const COLUMNS = 8
 const ROWS = Math.ceil(GALLERY.length / COLUMNS)
+
+/** The gallery's cards, taken straight from the pool (the fixtures go through a CardLayer). */
+let galleryCards: CardMesh[] = []
+
+/** Puts the chosen fixture, or the gallery, on the table. */
+function present(instance: TableScene) {
+  for (const card of galleryCards) instance.cards.release(card)
+  galleryCards = []
+  if (fixture.value) {
+    if (instance.viewport) layOutFixture(instance, instance.viewport)
+  } else {
+    cardLayer(instance).clear()
+    layoutMode.value = null
+    instance.setFrame({ x: 0, z: 0, ...PLAY_AREA })
+    layOutGallery(instance)
+  }
+  updateCardStats(instance)
+  instance.invalidate()
+}
+
+function layOutFixture(instance: TableScene, viewport: Viewport) {
+  if (!fixture.value) return
+  const { view, selected } = fixtureView(fixture.value, seat.value)
+  const layout = computeLayout(view, viewport, { selected })
+  cardLayer(instance).apply(layout)
+  layoutMode.value = layout.mode
+  updateCardStats(instance)
+}
 
 /** Every card face up in a grid filling the play area; the last one face down with no face. */
 function layOutGallery(instance: TableScene) {
@@ -70,8 +125,8 @@ function layOutGallery(instance: TableScene) {
       (row - (ROWS - 1) / 2) * cellDepth,
     )
     instance.table.add(card)
+    galleryCards.push(card)
   })
-  updateCardStats(instance)
 }
 
 /** What the cards on the table share: one atlas texture and one material, however many. */
@@ -96,7 +151,8 @@ let stopWatchingAtlas: (() => void) | null = null
 function onReady(instance: TableScene) {
   scene.value = instance
   failure.value = null
-  layOutGallery(instance)
+  galleryCards = []
+  present(instance)
   const image = instance.cards.atlas.image
   const show = () => (atlas.value = { loaded: image.complete, missing: image.missing })
   show()
@@ -136,11 +192,16 @@ async function animate() {
   animating.value = true
   const timeline = new Timeline()
   tableCards(instance).forEach((card, i) => {
-    const slot = card.userData.slot as CardId | 'back'
-    if (slot === 'back') return
+    // A fixture's cards keep their faces; a hidden one (no face) stays as it is.
+    const gallery = card.userData.slot !== undefined
+    const slot = (gallery ? card.userData.slot : card.face) as CardId | 'back' | null
+    if (slot === 'back' || slot === null) return
     const faceUp = !card.faceUp
     const wave = (i % COLUMNS) + Math.floor(i / COLUMNS)
-    timeline.add(card.flip({ faceUp, face: faceUp ? slot : null }), wave * 35)
+    timeline.add(
+      card.flip({ faceUp, face: gallery ? (faceUp ? slot : null) : undefined }),
+      wave * 35,
+    )
   })
   await instance.animator.play(timeline).finished
   animating.value = false
@@ -176,9 +237,23 @@ function restoreContext() {
 
 <template>
   <main class="dev-table on-dark">
-    <header class="dev-table__bar">
+    <header class="dev-table__bar" :class="{ 'visually-hidden': bare }">
       <h1 class="dev-table__title">Table (dev)</h1>
       <div class="dev-table__controls">
+        <label>
+          Show
+          <select v-model="fixtureId" data-testid="fixture">
+            <option :value="GALLERY_ID">All cards</option>
+            <option v-for="f in LAYOUT_FIXTURES" :key="f.id" :value="f.id">{{ f.label }}</option>
+          </select>
+        </label>
+        <label>
+          As
+          <select v-model.number="seat" data-testid="seat" :disabled="!fixture">
+            <option :value="0">Seat 0 (pone)</option>
+            <option :value="1">Seat 1 (dealer)</option>
+          </select>
+        </label>
         <button
           type="button"
           data-testid="animate"
@@ -212,6 +287,8 @@ function restoreContext() {
         <dd data-testid="frame-count">{{ frames }}</dd>
         <dt>Camera aspect</dt>
         <dd data-testid="camera-aspect">{{ cameraAspect?.toFixed(3) ?? '–' }}</dd>
+        <dt>Layout</dt>
+        <dd data-testid="layout-mode">{{ layoutMode ?? '–' }}</dd>
         <dt>Card art</dt>
         <dd data-testid="atlas-state">
           {{ atlas.loaded ? 'loaded' : 'loading' }}
@@ -280,14 +357,18 @@ function restoreContext() {
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+/* Flowing, not one line per stat, so the table keeps most of a short window. */
 .dev-table__stats {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0 var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-1);
   margin: 0;
 }
+.dev-table__stats dt::after {
+  content: ':';
+}
 .dev-table__stats dd {
-  margin: 0;
+  margin: 0 var(--space-2) 0 0;
   font-variant-numeric: tabular-nums;
 }
 .dev-table__stage {

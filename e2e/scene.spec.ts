@@ -21,8 +21,8 @@ function watchConsole(page: Page): string[] {
 }
 
 /** Opens /dev/table and waits for the table and, unless told not to, the card art. */
-async function openTable(page: Page, { art = true } = {}) {
-  await page.goto('/dev/table')
+async function openTable(page: Page, { art = true, query = '' } = {}) {
+  await page.goto(`/dev/table${query}`)
   await expect(page.getByTestId('webgl')).toHaveText('yes')
   await expect(page.getByTestId('table-ready')).toBeAttached()
   // The art arriving redraws the table, so tests that count frames wait for it.
@@ -274,4 +274,69 @@ test.describe('3D cards on a phone', () => {
       '1 clean of 1 (last: 0 geometries, 0 textures, context released)',
     )
   })
+})
+
+/** The fixture hands on /dev/table, and how many cards (deck included) each puts on the table. */
+const FIXTURES = [
+  ['lobby', 1],
+  ['deal', 13],
+  ['discard', 13],
+  ['cut', 13],
+  ['play', 14],
+  ['go', 14],
+  ['show-1', 14],
+  ['show-2', 14],
+  ['show-3', 14],
+  ['game-over', 14],
+] as const
+
+for (const { name, viewport, mode } of [
+  { name: 'portrait', viewport: { width: 360, height: 640 }, mode: 'portrait' },
+  { name: 'landscape', viewport: { width: 1440, height: 900 }, mode: 'landscape' },
+]) {
+  test.describe(`3D layouts, ${name}`, () => {
+    test.use({ viewport, deviceScaleFactor: 1 })
+
+    test('lays out every point of a hand, for both seats', async ({ page }, testInfo) => {
+      const problems = watchConsole(page)
+      // The controls hidden, so the table has the whole window, as it will in a game.
+      await openTable(page, { query: '?fixture=deal&seat=0&controls=0' })
+      for (const seat of ['0', '1']) {
+        await page.getByTestId('seat').selectOption(seat, { force: true })
+        for (const [fixture, cards] of FIXTURES) {
+          await page.getByTestId('fixture').selectOption(fixture, { force: true })
+          await expect(page.getByTestId('layout-mode')).toHaveText(mode)
+          await expect(page.getByTestId('card-stats')).toHaveText(
+            `${cards} cards, 1 material(s), 1 texture(s)`,
+          )
+          await expect(page).toHaveURL(new RegExp(`fixture=${fixture}&seat=${seat}`))
+          await page.waitForTimeout(150)
+          await testInfo.attach(`${fixture}, seat ${seat}`, {
+            body: await page.getByTestId('table-canvas').screenshot(),
+            contentType: 'image/png',
+          })
+        }
+      }
+      expect(problems).toEqual([])
+    })
+  })
+}
+
+test('switches arrangement when the window turns', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openTable(page, { query: '?fixture=play&seat=0&controls=0' })
+  await expect(page.getByTestId('layout-mode')).toHaveText('portrait')
+  await page.setViewportSize({ width: 844, height: 390 })
+  await expect(page.getByTestId('layout-mode')).toHaveText('landscape')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByTestId('layout-mode')).toHaveText('portrait')
+})
+
+test('goes back to the card gallery from a fixture', async ({ page }) => {
+  await openTable(page, { query: '?fixture=show-3&seat=1' })
+  await expect(page.getByTestId('card-stats')).toHaveText('14 cards, 1 material(s), 1 texture(s)')
+  await page.getByTestId('fixture').selectOption('gallery')
+  await expect(page.getByTestId('card-stats')).toHaveText('53 cards, 1 material(s), 1 texture(s)')
+  await expect(page.getByTestId('layout-mode')).toHaveText('–')
+  await expect(page).toHaveURL(/\/dev\/table$/)
 })
